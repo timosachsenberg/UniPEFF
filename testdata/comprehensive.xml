@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Comprehensive UniPEFF test fixture. Exercises every parser path (all molecular
+     processing types, every modification routing, all disulfide shapes, every variant
+     shape, unhandled feature types) and every writer path. See README.md. -->
+<uniprot>
+  <entry dataset="Swiss-Prot">
+    <accession>P12345</accession>
+    <accession>P99999</accession>
+    <name>KSINK_HUMAN</name>
+    <protein>
+      <recommendedName>
+        <fullName>Kitchen-sink protein (test) | alpha\beta</fullName>
+      </recommendedName>
+    </protein>
+    <gene>
+      <name type="primary">GENE1</name>
+      <name type="synonym">SYN1</name>
+    </gene>
+    <feature type="initiator methionine">
+      <location>
+        <position position="1"/>
+      </location>
+    </feature>
+    <feature type="signal peptide">
+      <location>
+        <begin position="2"/>
+        <end position="20"/>
+      </location>
+    </feature>
+    <feature type="transit peptide">
+      <location>
+        <begin position="21"/>
+        <end position="30"/>
+      </location>
+    </feature>
+    <feature type="propeptide">
+      <location>
+        <begin position="31"/>
+        <end position="40"/>
+      </location>
+    </feature>
+    <feature type="chain">
+      <location>
+        <begin position="41"/>
+        <end position="100"/>
+      </location>
+    </feature>
+    <feature type="sequence variant">
+      <original>A</original>
+      <variation>V</variation>
+      <location>
+        <position position="25"/>
+      </location>
+    </feature>
+    <feature type="sequence variant">
+      <original>AB</original>
+      <variation>CD</variation>
+      <location>
+        <begin position="30"/>
+        <end position="31"/>
+      </location>
+    </feature>
+    <feature type="sequence variant">
+      <location>
+        <position position="33"/>
+      </location>
+    </feature>
+    <feature type="sequence variant">
+      <location>
+        <begin position="36"/>
+        <end position="38"/>
+      </location>
+    </feature>
+    <feature type="glycosylation site">
+      <location>
+        <position position="48"/>
+      </location>
+    </feature>
+    <feature type="modified residue" description="Phosphoserine">
+      <location>
+        <position position="50"/>
+      </location>
+    </feature>
+    <feature type="sequence conflict">
+      <original>K</original>
+      <variation>R</variation>
+      <location>
+        <position position="52"/>
+      </location>
+    </feature>
+    <feature type="modified residue" description="(Microbial infection) Phosphothreonine; by XYZ">
+      <location>
+        <position position="55"/>
+      </location>
+    </feature>
+    <feature type="modified residue" description="Test methylation unimod only">
+      <location>
+        <position position="60"/>
+      </location>
+    </feature>
+    <feature type="modified residue" description="Test generic mod no accession">
+      <location>
+        <position position="65"/>
+      </location>
+    </feature>
+    <feature type="modified residue" description="Nonexistent modification">
+      <location>
+        <position position="70"/>
+      </location>
+    </feature>
+    <feature type="disulfide bond">
+      <location>
+        <begin position="45"/>
+        <end position="80"/>
+      </location>
+    </feature>
+    <feature type="cross-link">
+      <location>
+        <begin position="88"/>
+        <end position="89"/>
+      </location>
+    </feature>
+    <feature type="disulfide bond">
+      <location>
+        <begin status="unknown"/>
+        <end position="90"/>
+      </location>
+    </feature>
+    <feature type="disulfide bond">
+      <location>
+        <position position="95"/>
+      </location>
+    </feature>
+    <sequence length="100" mass="11000">MSEQNNTEMTFQIQRIYTKDISFEAPNAPHVFQKDWQPEVKLDLDTASSQLADDVYEVVLRVTVTASLGEETAFLCEVQQGGKLMNPQRSTVWYACDEFG</sequence>
+  </entry>
+  <entry dataset="TrEMBL">
+    <accession>Q67890</accession>
+    <name>MINI_HUMAN</name>
+    <protein>
+      <recommendedName>
+        <fullName>Minimal TrEMBL entry</fullName>
+      </recommendedName>
+    </protein>
+    <sequence length="30" mass="3000">MKLDLDTASSQLADDVYEVVLRVTVTASLGE</sequence>
+  </entry>
+</uniprot>
