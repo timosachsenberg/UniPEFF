@@ -390,6 +390,12 @@ namespace UniPEFF
                     }
                 }
             }
+            // Both source lists are complete only now; fold disulfide cystines into each
+            // entry's modified-residue list (position-sorted) before handing back the model.
+            for (var EntryRunner = ThisPEFF.Entries.Next; EntryRunner != null; EntryRunner = EntryRunner.Next)
+            {
+                EntryRunner.MergeDisulfideResiduesIntoModifiedResidues();
+            }
             PERunner.DebugPrint();
             return ThisPEFF;
         }
@@ -410,6 +416,13 @@ namespace UniPEFF
         public SequenceVariantComplex SequenceVariantsComplex = new SequenceVariantComplex();
 
         public PEFFentry Next = null;
+
+        // Fold the disulfide-bond half cystines into the main modified-residue list,
+        // position-sorted, so PEFF output can emit a single ordered ModRes annotation.
+        public void MergeDisulfideResiduesIntoModifiedResidues()
+        {
+            ModifiedResiduesUniProt.AbsorbAndSortFrom(ModifiedResiduesDisulfide);
+        }
 
         public void DebugPrint ()
         {
@@ -460,7 +473,45 @@ namespace UniPEFF
         public int Position = 0;
         public ModifiedResidueUniProt Next = null;
 
-        // TODO: merge sort the half cystines into this list after all the disulfide and modified residue lines are processed
+        // Absorbs every node from otherHead's list into this list, then orders the combined
+        // list by sequence Position. Existing nodes are MOVED (their Next pointers re-linked),
+        // never cloned, so LinkedModifications references into the disulfide list stay valid.
+        // otherHead is emptied. (Implements the former "merge half cystines" TODO.)
+        public void AbsorbAndSortFrom(ModifiedResidueUniProt otherHead)
+        {
+            if (ReferenceEquals(this, otherHead)) return;   // a list can't absorb itself; guard against data loss
+            var nodes = new List<(ModifiedResidueUniProt Node, int SourceRank)>();
+            for (var n = this.Next; n != null; )
+            {
+                var next = n.Next;
+                n.Next = null;
+                nodes.Add((n, 0));
+                n = next;
+            }
+            for (var n = otherHead.Next; n != null; )
+            {
+                var next = n.Next;
+                n.Next = null;
+                nodes.Add((n, 1));
+                n = next;
+            }
+
+            var sorted = nodes
+                .OrderBy(x => x.Node.Position == 0)   // unknown (0) positions sort LAST
+                .ThenBy(x => x.Node.Position)
+                .ThenBy(x => x.SourceRank);           // modified residue before half cystine on ties
+                                                      // (OrderBy/ThenBy are stable -> original order kept within a group)
+
+            var runner = this;
+            foreach (var item in sorted)
+            {
+                runner.Next = item.Node;
+                runner = runner.Next;
+            }
+            runner.Next = null;
+            otherHead.Next = null;                    // the disulfide list has been consumed
+        }
+
         public void DebugPrint()
         {
             ModifiedResidueUniProt MRURunner = this.Next;
