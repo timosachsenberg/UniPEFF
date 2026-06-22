@@ -47,7 +47,11 @@ Entry **P12345** (Swiss-Prot) is a deliberate "kitchen sink":
   unknown-position one by **id, not position** — while the unpaired cross-chain cystine is
   `\ModResPsi`-only.
 - **Variants:** simple (25), complex replacement (30–31), single-residue deletion (33), range
-  deletion (36–38).
+  deletion (36–38); a single-residue substitution UniProt expressed as a range (42–42|M) that
+  is **demoted** to `\VariantSimple`; and out-of-bounds variants (a simple at 250, a complex
+  200–201) that are **omitted with a warning** (positions must lie within the length-100
+  sequence). A trailing third `<entry>` with **no accession** is skipped (a PEFF entry MUST
+  start with `>Prefix:DbUniqueId`), so only two entries are written.
 - **Still-unhandled feature types** (`sequence conflict`, `non-standard amino acid`) are
   parsed without error and produce no output.
 

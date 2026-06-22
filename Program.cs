@@ -500,6 +500,21 @@ namespace UniPEFF
         public void WritePeff(TextWriter Writer, PeffHeader Header, string PrefixOverride, bool AnnotationIdentifiers, OboNameMap PsiModNames, OboNameMap UnimodNames)
         {
             Header.HasAnnotationIdentifiers = AnnotationIdentifiers;
+
+            // A PEFF entry MUST start with >Prefix:DbUniqueId, so entries with no accession are
+            // skipped (with a warning); if that leaves nothing, write no (invalid, empty) PEFF.
+            int Writables = 0;
+            for (var ER = Entries.Next; ER != null; ER = ER.Next)
+            {
+                if (!string.IsNullOrEmpty(ER.Accession)) Writables++;
+                else Console.Error.WriteLine("\tWarning: skipping an entry with no accession.");
+            }
+            if (Writables == 0)
+            {
+                Console.Error.WriteLine("\tError: no entry has an accession; no PEFF written (a PEFF file must contain >= 1 sequence entry).");
+                return;
+            }
+
             WriteFileDescriptionBlock(Writer);
             int Fallbacks = 0;
 
@@ -515,10 +530,10 @@ namespace UniPEFF
             {
                 for (var ER = Entries.Next; ER != null; ER = ER.Next)
                 {
+                    if (string.IsNullOrEmpty(ER.Accession)) continue;
                     string P = PEFFentry.PrefixForDataset(ER.DataSet);
                     if (!Prefixes.Contains(P)) Prefixes.Add(P);
                 }
-                if (Prefixes.Count == 0) Prefixes.Add("sp");   // spec requires >= 1 database block
             }
             // Header section: ALL database-description blocks come first -- the spec requires the
             // whole header section to precede the sequence-entry section (the entries then follow).
@@ -526,7 +541,7 @@ namespace UniPEFF
             {
                 int Count = 0;
                 for (var ER = Entries.Next; ER != null; ER = ER.Next)
-                    if (Single || PEFFentry.PrefixForDataset(ER.DataSet) == P) Count++;
+                    if (!string.IsNullOrEmpty(ER.Accession) && (Single || PEFFentry.PrefixForDataset(ER.DataSet) == P)) Count++;
                 Header.Prefix = P;
                 Header.NumberOfEntries = Count;
                 WriteDbDescriptionBlock(Writer, Header);
@@ -535,7 +550,7 @@ namespace UniPEFF
             foreach (string P in Prefixes)
             {
                 for (var ER = Entries.Next; ER != null; ER = ER.Next)
-                    if (Single || PEFFentry.PrefixForDataset(ER.DataSet) == P)
+                    if (!string.IsNullOrEmpty(ER.Accession) && (Single || PEFFentry.PrefixForDataset(ER.DataSet) == P))
                         Fallbacks += ER.WritePeffEntry(Writer, P, AnnotationIdentifiers, PsiModNames, UnimodNames);
             }
             if (Fallbacks > 0)
@@ -746,22 +761,42 @@ namespace UniPEFF
                       M => M.Modification == null || (string.IsNullOrEmpty(M.Modification.PSIModAccession) && string.IsNullOrEmpty(M.Modification.UnimodAccession)),
                       M => "", null);
 
-            // Simple (single-residue) variants
+            // Simple (single-residue) variants: the real list, plus any single-residue substitution
+            // that UniProt expressed as a range (PEFF requires those to be VariantSimple, not Complex).
             {
                 var Builder = new StringBuilder();
                 for (var V = SequenceVariantsSimple.Next; V != null; V = V.Next)
                 {
                     if (V.Position == 0) continue;   // PEFF VariantSimple position MUST be > 0; "?" is ModRes-only
+                    if (BaseSequence != null && V.Position > BaseSequence.Length)
+                    {
+                        Console.Error.WriteLine("\tWarning: " + Accession + " VariantSimple position " + V.Position + " exceeds sequence length " + BaseSequence.Length + "; omitted.");
+                        continue;   // spec: position MUST be <= protein length
+                    }
                     Builder.Append('(').Append(IdPrefix()).Append(V.Position).Append('|').Append(EscapePeff(V.NewAA.ToString())).Append(')');
+                }
+                for (var V = SequenceVariantsComplex.Next; V != null; V = V.Next)
+                {
+                    // (b|b|X) single-residue substitution -> VariantSimple; a one-char deletion (b|b|) stays complex.
+                    if (V.Begin != 0 && V.Begin == V.End && V.NewSeq != null && V.NewSeq.Length == 1
+                        && !(BaseSequence != null && V.Begin > BaseSequence.Length))
+                        Builder.Append('(').Append(IdPrefix()).Append(V.Begin).Append('|').Append(EscapePeff(V.NewSeq)).Append(')');
                 }
                 if (Builder.Length > 0) Tag("VariantSimple", Builder.ToString());
             }
-            // Complex (multi-residue / deletion) variants
+            // Complex (multi-residue / deletion) variants, excluding the single-residue substitutions
+            // demoted to VariantSimple above.
             {
                 var Builder = new StringBuilder();
                 for (var V = SequenceVariantsComplex.Next; V != null; V = V.Next)
                 {
                     if (V.Begin == 0 || V.End == 0) continue;   // positions count from 1; "?" is ModRes-only
+                    if (V.Begin > V.End || (BaseSequence != null && (V.Begin > BaseSequence.Length || V.End > BaseSequence.Length)))
+                    {
+                        Console.Error.WriteLine("\tWarning: " + Accession + " VariantComplex " + V.Begin + "-" + V.End + " is out of bounds (length " + BaseSequence?.Length + "); omitted.");
+                        continue;   // spec: positions count from 1 and must lie within the sequence
+                    }
+                    if (V.Begin == V.End && V.NewSeq != null && V.NewSeq.Length == 1) continue;   // demoted to VariantSimple
                     Builder.Append('(').Append(IdPrefix()).Append(V.Begin).Append('|').Append(V.End).Append('|').Append(EscapePeff(V.NewSeq ?? "")).Append(')');
                 }
                 if (Builder.Length > 0) Tag("VariantComplex", Builder.ToString());

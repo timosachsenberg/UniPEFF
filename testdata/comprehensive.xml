@@ -77,6 +77,29 @@
         <end position="38"/>
       </location>
     </feature>
+    <feature type="sequence variant">
+      <original>L</original>
+      <variation>M</variation>
+      <location>
+        <begin position="42"/>
+        <end position="42"/>
+      </location>
+    </feature>
+    <feature type="sequence variant">
+      <original>A</original>
+      <variation>X</variation>
+      <location>
+        <position position="250"/>
+      </location>
+    </feature>
+    <feature type="sequence variant">
+      <original>AB</original>
+      <variation>CD</variation>
+      <location>
+        <begin position="200"/>
+        <end position="201"/>
+      </location>
+    </feature>
     <feature type="glycosylation site" description="N-linked (GlcNAc...) asparagine">
       <location>
         <position position="48"/>
@@ -181,5 +204,10 @@
     </organism>
     <proteinExistence type="predicted"/>
     <sequence length="31" mass="3000" version="1">MKLDLDTASSQLADDVYEVVLRVTVTASLGE</sequence>
+  </entry>
+  <!-- Validation guard: an entry with NO accession MUST be skipped (>Prefix:DbUniqueId is mandatory). -->
+  <entry dataset="Swiss-Prot">
+    <name>NOACC_TEST</name>
+    <sequence length="10" mass="1000">MKLDLDTASS</sequence>
   </entry>
 </uniprot>
