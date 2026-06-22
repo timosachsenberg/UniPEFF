@@ -1,0 +1,10 @@
+# Keep line endings deterministic regardless of core.autocrlf. The PEFF writer
+# emits LF, so the golden .peff files and the shell runner must stay LF or the
+# testdata/run.sh diff would fail on a CRLF checkout (e.g. Windows).
+*.peff  text eol=lf
+*.sh    text eol=lf
+*.cs    text eol=lf
+*.xml   text eol=lf
+*.txt   text eol=lf
+*.md    text eol=lf
+*.sln   text eol=crlf
