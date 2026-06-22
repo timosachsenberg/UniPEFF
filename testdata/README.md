@@ -26,7 +26,9 @@ Entry **P12345** (Swiss-Prot) is a deliberate "kitchen sink":
   (`\SV`/`\EV`), protein existence (`\PE`); two accessions (the first is the primary id, the
   second becomes `\AltAC`); mnemonic (`\ID`); a fullName mixing paired and unpaired parens plus
   `|` and `\` (escaping: only `|`, `\` and *unpaired* parens are backslash-escaped; balanced
-  parens are left intact); and a gene with a synonym (only the primary name is kept).
+  parens are left intact; `\PName` is a bare scalar value, **not** a `(parenthesized)` list); and
+  a gene whose **synonym precedes the primary name** — a bounded `<gene>` subtree scan still picks
+  the primary `\GName`, independent of child order.
 - **Molecular processing:** all five types → their PEFF CVs — initiator methionine (single
   position), signal peptide, transit peptide, propeptide, chain; plus an unknown-position
   processing feature that MUST be omitted (`\Processed` positions count from 1; "?" is
@@ -34,8 +36,10 @@ Entry **P12345** (Swiss-Prot) is a deliberate "kitchen sink":
 - **Modifications:** PSI-MOD (`\ModResPsi`), Unimod-only (`\ModResUnimod`), generic
   no-accession (`\ModRes`), with names resolved from the bundled `psi-mod.obo`/`unimod.obo`
   (PEFF requires the OBO `name:`, e.g. `O-phospho-L-serine`, not the UniProt synonym); the
-  `(Microbial infection)` and `;`-suffix description strips; and a description absent from
-  `ptmlist.txt` (warns, produces no output, does not crash).
+  `(Microbial infection)` and `;`-suffix description strips; a description absent from
+  `ptmlist.txt` (warns, produces no output, does not crash); and an **unknown-position**
+  modified residue and glycosylation site (`<position status="unknown"/>`) emitted as `?`
+  (the writer renders position 0 as `?`, legal only inside ModRes) rather than crashing.
 - **Glycosylation / lipidation / cross-links → modifications:** a glycosylation site with an
   embedded paired-paren description (`N-linked (GlcNAc...)`, left unescaped) and one with no
   description (name falls back to the feature type); a lipidation matching `ptmlist.txt`
@@ -48,12 +52,20 @@ Entry **P12345** (Swiss-Prot) is a deliberate "kitchen sink":
   `\ModResPsi`-only.
 - **Variants:** simple (25), complex replacement (30–31), single-residue deletion (33), range
   deletion (36–38); a single-residue substitution UniProt expressed as a range (42–42|M) that
-  is **demoted** to `\VariantSimple`; and out-of-bounds variants (a simple at 250, a complex
-  200–201) that are **omitted with a warning** (positions must lie within the length-100
-  sequence). A trailing third `<entry>` with **no accession** is skipped (a PEFF entry MUST
-  start with `>Prefix:DbUniqueId`), so only two entries are written.
-- **Still-unhandled feature types** (`sequence conflict`, `non-standard amino acid`) are
-  parsed without error and produce no output.
+  is **demoted** to `\VariantSimple`; a single-position deletion expressed with `<original>` but
+  **no `<variation>`** (→ `\VariantComplex (44|44|)`, not a crash); a **multi-residue insertion**
+  at one position (`A→APT` → `\VariantComplex (46|46|APT)`, never a truncated `\VariantSimple
+  (46|A)`); and out-of-bounds variants (a simple at 250, a complex 200–201) that are **omitted
+  with a warning** (positions must lie within the length-100 sequence).
+- **Skipped entries:** a trailing `<entry>` with **no accession**, and another with an accession
+  but **no sequence**, are both skipped (a PEFF entry is `>Prefix:DbUniqueId` + a sequence block),
+  so only two entries are written and `NumberOfEntries` counts only those.
+- **Still-unhandled feature types** (`sequence conflict`, `non-standard amino acid`) are parsed
+  without error and produce no output.
+
+`compact.xml` is the same kind of entry serialized with **no pretty-print whitespace** between
+elements; `run.sh` asserts the name/depth-driven parser extracts identical annotations from it
+(the previous fixed-`Read()`-count parser was whitespace-layout-dependent and would mis-parse it).
 
 Entry **Q67890** (TrEMBL) is annotation-free but carries metadata (organism, versions,
 `\PE=4` predicted, a second accession → `\AltAC`): it checks multi-entry handling, the

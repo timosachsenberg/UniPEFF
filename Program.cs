@@ -19,10 +19,74 @@ namespace UniPEFF
         static string CleanPtmDescription(string Description)
         {
             if (string.IsNullOrEmpty(Description)) return Description;
-            if (Description.StartsWith("(Microbial infection)")) Description = Description.Substring(22);
+            // Strip the "(Microbial infection) " qualifier by matching the whole literal (incl. its
+            // trailing space), so the substring length can never overrun a bare "(Microbial infection)".
+            const string MicrobialInfection = "(Microbial infection) ";
+            if (Description.StartsWith(MicrobialInfection)) Description = Description.Substring(MicrobialInfection.Length);
             int SemiPosition = Description.IndexOf(';');
             if (SemiPosition > -1) Description = Description.Substring(0, SemiPosition);
             return Description;
+        }
+
+        // The parsed content of a <feature> subtree: the original/variation residues (sequence
+        // variants) and the location. A null Begin/End/Position means UniProt gave the coordinate
+        // as status="unknown" (or omitted it); callers decide whether that is legal for their key
+        // (ModRes accepts "?"; Variant/Processed positions MUST be known and in range).
+        class FeatureContent
+        {
+            public string Original;
+            public string Variation;
+            public bool HasPosition;   // a single <position> was present
+            public bool HasRange;      // a <begin>/<end> pair was present
+            public int? Position;
+            public int? Begin;
+            public int? End;
+        }
+
+        // Parse a UniProt "position" attribute safely: returns null for a missing attribute or a
+        // status="unknown" coordinate (where the attribute is absent). Never throws.
+        static int? ParsePosition(string Attribute)
+            => (Attribute != null && Int32.TryParse(Attribute, out int Value)) ? Value : (int?)null;
+
+        // PEFF VariantSimple newAminoAcid MUST be an amino-acid letter (ambiguity codes included) or '*'.
+        public static bool IsResidueCode(char C)
+            => (C >= 'A' && C <= 'Z') || (C >= 'a' && C <= 'z') || C == '*';
+
+        // Read a <feature> element's subtree by NAME and DEPTH (not by counting Read() calls),
+        // collecting the location and any original/variation residues. The reader must be on the
+        // <feature> start element; on return it is on the matching </feature> end element. Robust to
+        // whitespace, element ordering, optional elements, and status="unknown".
+        static FeatureContent ReadFeatureContent(XmlReader InputStream)
+        {
+            var Content = new FeatureContent();
+            if (InputStream.IsEmptyElement) return Content;
+            int FeatureDepth = InputStream.Depth;
+            while (InputStream.Read() && !(InputStream.NodeType == XmlNodeType.EndElement && InputStream.Depth == FeatureDepth))
+            {
+                if (InputStream.NodeType != XmlNodeType.Element) continue;
+                switch (InputStream.Name)
+                {
+                    case "original":
+                        if (!InputStream.IsEmptyElement && InputStream.Read()) Content.Original = InputStream.Value;
+                        break;
+                    case "variation":
+                        if (Content.Variation == null && !InputStream.IsEmptyElement && InputStream.Read()) Content.Variation = InputStream.Value;
+                        break;
+                    case "position":
+                        Content.HasPosition = true;
+                        Content.Position = ParsePosition(InputStream["position"]);
+                        break;
+                    case "begin":
+                        Content.HasRange = true;
+                        Content.Begin = ParsePosition(InputStream["position"]);
+                        break;
+                    case "end":
+                        Content.HasRange = true;
+                        Content.End = ParsePosition(InputStream["position"]);
+                        break;
+                }
+            }
+            return Content;
         }
 
         public static PEFFmodel FromUniProtXML(XmlReader InputStream, bool RecordMolecularProcessing, bool RecordAminoAcidModifications, bool RecordSequenceVariations, PTMList PTMCV)
@@ -37,6 +101,30 @@ namespace UniPEFF
             SequenceVariantComplex SVCRunner = null;
             LinkedModifications    DSLMRunner = null;
             AltAccession           AAARunner = null;
+
+            // Append helpers for the sentinel-headed lists: each advances the captured runner cursor.
+            MolecularProcessing AddProcessing(string CV, string Type, int Begin, int End)
+            {
+                MPRunner.Next = new MolecularProcessing();
+                MPRunner = MPRunner.Next;
+                MPRunner.CV = CV; MPRunner.Type = Type; MPRunner.Begin = Begin; MPRunner.End = End;
+                return MPRunner;
+            }
+            ModifiedResidueUniProt AddModifiedResidue(int Position, PTMList Modification)
+            {
+                MRURunner.Next = new ModifiedResidueUniProt();
+                MRURunner = MRURunner.Next;
+                MRURunner.Position = Position; MRURunner.Modification = Modification;
+                return MRURunner;
+            }
+            ModifiedResidueUniProt AddDisulfideResidue(int Position, PTMList Modification)
+            {
+                DSRunner.Next = new ModifiedResidueUniProt();
+                DSRunner = DSRunner.Next;
+                DSRunner.Position = Position; DSRunner.Modification = Modification;
+                return DSRunner;
+            }
+
             while (InputStream.Read())
             {
                 var ThisNodeType = InputStream.NodeType;
@@ -93,16 +181,17 @@ namespace UniPEFF
                     }
                     else if (InputStream.Name == "gene")
                     {
-                        if (InputStream.Read())
+                        // Bounded scan of the <gene> subtree: capture <name type="primary"> wherever it
+                        // appears (a synonym/ORF/ordered-locus name may precede it), stopping at </gene>.
+                        if (!InputStream.IsEmptyElement)
                         {
-                            if (InputStream.Read())
+                            int GeneDepth = InputStream.Depth;
+                            while (InputStream.Read() && !(InputStream.NodeType == XmlNodeType.EndElement && InputStream.Depth == GeneDepth))
                             {
-                                if (InputStream["type"] == "primary")
+                                if (InputStream.NodeType == XmlNodeType.Element && InputStream.Name == "name"
+                                    && InputStream["type"] == "primary" && PERunner.PrimaryGene == null)
                                 {
-                                    if (InputStream.Read())
-                                    {
-                                        PERunner.PrimaryGene = InputStream.Value;
-                                    }
+                                    if (InputStream.Read()) PERunner.PrimaryGene = InputStream.Value;
                                 }
                             }
                         }
@@ -138,350 +227,147 @@ namespace UniPEFF
                     }
                     if (InputStream.Name == "feature")
                     {
+                        string FeatureType = InputStream["type"];
+                        string FeatureDescription = InputStream["description"];
+                        // Read the whole feature subtree once, by name/depth, so every category below
+                        // works from structured content instead of fragile Read()-count navigation.
+                        FeatureContent FC = ReadFeatureContent(InputStream);
+                        // A single-residue site: prefer <position>, else a range's <begin>; an unknown
+                        // coordinate becomes 0, which the writer renders as "?" (legal only in ModRes).
+                        int ModPosition = FC.Position ?? FC.Begin ?? 0;
+
                         if (RecordMolecularProcessing)
                         {
-                            switch (InputStream["type"])
+                            switch (FeatureType)
                             {
                                 case "chain":
-                                    MPRunner.Next = new MolecularProcessing();
-                                    MPRunner = MPRunner.Next;
-                                    MPRunner.CV = "PEFF:0001020";
-                                    MPRunner.Type = "mature protein";
-                                    // Get begin and end positions from location element afterwards
-                                    // Skip ahead until we're on a begin element (within a location).
-                                    // As written, this code will die nastily if it hits end of file before it hits a begin element.
-                                    while (InputStream.Name != "begin")
-                                    {
-                                        InputStream.Read();
-                                    }
-                                    if (InputStream["position"] != null)
-                                        MPRunner.Begin = Int32.Parse(InputStream["position"]);
-                                    while (InputStream.Name != "end")
-                                    {
-                                        InputStream.Read();
-                                    }
-                                    if (InputStream["position"] != null)
-                                        MPRunner.End = Int32.Parse(InputStream["position"]);
+                                    AddProcessing("PEFF:0001020", "mature protein", FC.Begin ?? 0, FC.End ?? 0);
                                     break;
                                 case "initiator methionine":
-                                    MPRunner.Next = new MolecularProcessing();
-                                    MPRunner = MPRunner.Next;
-                                    MPRunner.CV = "PEFF:0001035";
-                                    MPRunner.Type = "initiator methionine";
-                                    // As written, this code will die nastily if it hits end of file before it hits a begin element.
-                                    while (InputStream.Name != "position")
-                                    {
-                                        InputStream.Read();
-                                    }
-                                    if (InputStream["position"] != null)
-                                    {
-                                        MPRunner.Begin = Int32.Parse(InputStream["position"]);
-                                        MPRunner.End = MPRunner.Begin;
-                                    }
+                                    AddProcessing("PEFF:0001035", "initiator methionine", FC.Position ?? 0, FC.Position ?? 0);
                                     break;
                                 case "propeptide":
-                                    // See G5ECN9 for example of both propeptide and signal peptide
-                                    MPRunner.Next = new MolecularProcessing();
-                                    MPRunner = MPRunner.Next;
-                                    MPRunner.CV = "PEFF:0001034";
-                                    MPRunner.Type = "propeptide";
-                                    // Get begin and end positions from location element afterwards
-                                    // As written, this code will die nastily if it hits end of file before it hits a begin element.
-                                    while (InputStream.Name != "begin")
-                                    {
-                                        InputStream.Read();
-                                    }
-                                    if (InputStream["position"] != null)
-                                        MPRunner.Begin = Int32.Parse(InputStream["position"]);
-                                    while (InputStream.Name != "end")
-                                    {
-                                        InputStream.Read();
-                                    }
-                                    if (InputStream["position"] != null)
-                                        MPRunner.End = Int32.Parse(InputStream["position"]);
+                                    AddProcessing("PEFF:0001034", "propeptide", FC.Begin ?? 0, FC.End ?? 0);
                                     break;
                                 case "signal peptide":
-                                    MPRunner.Next = new MolecularProcessing();
-                                    MPRunner = MPRunner.Next;
-                                    MPRunner.CV = "PEFF:0001021";
-                                    MPRunner.Type = "signal peptide";
-                                    // Get begin and end positions from location element afterwards
-                                    // As written, this code will die nastily if it hits end of file before it hits a begin element.
-                                    while (InputStream.Name != "begin")
-                                    {
-                                        InputStream.Read();
-                                    }
-                                    if (InputStream["position"] != null)
-                                        MPRunner.Begin = Int32.Parse(InputStream["position"]);
-                                    while (InputStream.Name != "end")
-                                    {
-                                        InputStream.Read();
-                                    }
-                                    if (InputStream["position"] != null)
-                                        MPRunner.End = Int32.Parse(InputStream["position"]);
+                                    AddProcessing("PEFF:0001021", "signal peptide", FC.Begin ?? 0, FC.End ?? 0);
                                     break;
                                 case "transit peptide":
-                                    MPRunner.Next = new MolecularProcessing();
-                                    MPRunner = MPRunner.Next;
-                                    MPRunner.CV = "PEFF:0001022";
-                                    MPRunner.Type = "transit peptide";
-                                    // Get begin and end positions from location element afterwards
-                                    // As written, this code will die nastily if it hits end of file before it hits a begin element.
-                                    while (InputStream.Name != "begin")
-                                    {
-                                        InputStream.Read();
-                                    }
-                                    if (InputStream["position"] != null)
-                                        MPRunner.Begin = Int32.Parse(InputStream["position"]);
-                                    while (InputStream.Name != "end")
-                                    {
-                                        InputStream.Read();
-                                    }
-                                    if (InputStream["position"] != null)
-                                        MPRunner.End = Int32.Parse(InputStream["position"]);
+                                    AddProcessing("PEFF:0001022", "transit peptide", FC.Begin ?? 0, FC.End ?? 0);
                                     break;
                             }
                         }
                         if (RecordAminoAcidModifications)
                         {
-                            switch (InputStream["type"])
+                            switch (FeatureType)
                             {
                                 case "cross-link":
-                                    // Isopeptide cross-link (e.g. ubiquitin/SUMO). A single <position>
-                                    // is the common inter-chain case; <begin>/<end> is intra-chain. PEFF
-                                    // has no generic cross-link-bond key, so we annotate the modified
-                                    // residue(s) by position and do not pair them. Route to \ModResPsi/
-                                    // \ModResUnimod when the description is a known ptmlist PTM, else \ModRes.
+                                    // Isopeptide cross-link (ubiquitin/SUMO etc.). PEFF has no generic
+                                    // cross-link-bond key, so annotate the modified residue(s) by position
+                                    // as a generic \ModRes -- a two-residue bond is not a residue PTM, so it
+                                    // is never routed into \ModResPsi/\ModResUnimod. Endpoints are not paired.
                                     {
-                                        string Desc = CleanPtmDescription(InputStream["description"]);
+                                        string Desc = CleanPtmDescription(FeatureDescription);
                                         if (string.IsNullOrEmpty(Desc)) Desc = "cross-link";
-                                        PTMList XLink = PTMCV.Find(Desc) ?? PTMList.Synthetic(Desc);
-                                        InputStream.Read();
-                                        InputStream.Read();
-                                        InputStream.Read();
-                                        InputStream.Read();
-                                        if (InputStream.Name == "position")
+                                        PTMList XLink = PTMList.Synthetic(Desc);
+                                        if (FC.HasRange)
                                         {
-                                            MRURunner.Next = new ModifiedResidueUniProt();
-                                            MRURunner = MRURunner.Next;
-                                            MRURunner.Position = Int32.Parse(InputStream["position"]);
-                                            MRURunner.Modification = XLink;
+                                            AddModifiedResidue(FC.Begin ?? 0, XLink);
+                                            AddModifiedResidue(FC.End ?? 0, XLink);
                                         }
-                                        else
-                                        {
-                                            MRURunner.Next = new ModifiedResidueUniProt();
-                                            MRURunner = MRURunner.Next;
-                                            try { MRURunner.Position = Int32.Parse(InputStream["position"]); }
-                                            catch (ArgumentNullException) { MRURunner.Position = 0; }
-                                            MRURunner.Modification = XLink;
-                                            InputStream.Read();
-                                            InputStream.Read();
-                                            MRURunner.Next = new ModifiedResidueUniProt();
-                                            MRURunner = MRURunner.Next;
-                                            try { MRURunner.Position = Int32.Parse(InputStream["position"]); }
-                                            catch (ArgumentNullException) { MRURunner.Position = 0; }
-                                            MRURunner.Modification = XLink;
-                                        }
+                                        else AddModifiedResidue(ModPosition, XLink);
                                     }
                                     break;
                                 case "disulfide bond":
-                                    // If a "begin" and "end" are supplied, the disulfide links two sites in the same chain.
-                                    // If a "position" is supplied, the disulfide links to another chain (perhaps even another polypeptide?).
-                                    // Note that we fake the entry for this mod since it isn't listed in ptmlist.txt
-                                    PTMList HalfCystine = PTMCV.Find("Half cystine");
-                                    InputStream.Read();
-                                    InputStream.Read();
-                                    InputStream.Read();
-                                    InputStream.Read();
-                                    // Console.WriteLine(InputStream.Value);
-                                    if (InputStream.Name=="position")
+                                    // <begin>/<end> => intra-chain bond (two linked half cystines); a single
+                                    // <position> => inter-chain (one endpoint here, not linked). Half cystine
+                                    // is hard-coded because it is absent from ptmlist.txt.
                                     {
-                                        // We only have one end of the bond here; don't create a LinkedModifications object.
-                                        DSRunner.Next = new ModifiedResidueUniProt();
-                                        DSRunner = DSRunner.Next;
-                                        DSRunner.Position = Int32.Parse(InputStream["position"]);
-                                        DSRunner.Modification = HalfCystine;
-                                    }
-                                    else
-                                    {
-                                        //InputStream.Name assumed to be "begin" indicating we have both ends of the bond
-                                        DSRunner.Next = new ModifiedResidueUniProt();
-                                        DSRunner = DSRunner.Next;
-                                        try
+                                        PTMList HalfCystine = PTMCV.Find("Half cystine");
+                                        if (FC.HasRange)
                                         {
-                                            DSRunner.Position = Int32.Parse(InputStream["position"]);
+                                            var First  = AddDisulfideResidue(FC.Begin ?? 0, HalfCystine);
+                                            var Second = AddDisulfideResidue(FC.End ?? 0, HalfCystine);
+                                            DSLMRunner.Next = new LinkedModifications();
+                                            DSLMRunner = DSLMRunner.Next;
+                                            DSLMRunner.Residue1 = First;
+                                            DSLMRunner.Residue2 = Second;
                                         }
-                                        catch (ArgumentNullException failure)
-                                        {
-                                            // Sometimes UniProt throws us an "unknown"
-                                            DSRunner.Position = 0;
-                                        }
-                                        DSRunner.Modification = HalfCystine;
-                                        ModifiedResidueUniProt FirstPosition = DSRunner;
-                                        InputStream.Read();
-                                        InputStream.Read();
-                                        DSRunner.Next = new ModifiedResidueUniProt();
-                                        DSRunner = DSRunner.Next;
-                                        try
-                                        {
-                                            DSRunner.Position = Int32.Parse(InputStream["position"]);
-                                        }
-                                        catch (ArgumentNullException failure)
-                                        {
-                                            DSRunner.Position = 0;
-                                        }
-                                        DSRunner.Modification = HalfCystine;
-                                        ModifiedResidueUniProt SecondPosition = DSRunner; 
-                                        DSLMRunner.Next = new LinkedModifications();
-                                        DSLMRunner = DSLMRunner.Next;
-                                        DSLMRunner.Residue1 = FirstPosition;
-                                        DSLMRunner.Residue2 = SecondPosition;
+                                        else AddDisulfideResidue(ModPosition, HalfCystine);
                                     }
                                     break;
                                 case "glycosylation site":
-                                    // Glycan compositions are not in PSI-MOD/Unimod, so emit a generic
-                                    // \ModRes carrying the UniProt description (e.g. "N-linked (GlcNAc...)").
+                                    // Glycans are not in PSI-MOD/Unimod -> generic \ModRes with the description.
                                     {
-                                        string Desc = CleanPtmDescription(InputStream["description"]);
+                                        string Desc = CleanPtmDescription(FeatureDescription);
                                         if (string.IsNullOrEmpty(Desc)) Desc = "glycosylation site";
-                                        InputStream.Read();
-                                        InputStream.Read();
-                                        InputStream.Read();
-                                        InputStream.Read();
-                                        MRURunner.Next = new ModifiedResidueUniProt();
-                                        MRURunner = MRURunner.Next;
-                                        MRURunner.Position = Int32.Parse(InputStream["position"]);
-                                        MRURunner.Modification = PTMList.Synthetic(Desc);
+                                        AddModifiedResidue(ModPosition, PTMList.Synthetic(Desc));
                                     }
                                     break;
                                 case "lipid moiety-binding region":
-                                    // Lipidation: route to \ModResPsi/\ModResUnimod if the description is a
-                                    // known ptmlist PTM, else a generic \ModRes.
+                                    // Lipidation -> \ModResPsi/\ModResUnimod when it is a known ptmlist PTM,
+                                    // else a generic \ModRes.
                                     {
-                                        string Desc = CleanPtmDescription(InputStream["description"]);
+                                        string Desc = CleanPtmDescription(FeatureDescription);
                                         if (string.IsNullOrEmpty(Desc)) Desc = "lipid moiety-binding region";
-                                        PTMList Hit = PTMCV.Find(Desc);
-                                        InputStream.Read();
-                                        InputStream.Read();
-                                        InputStream.Read();
-                                        InputStream.Read();
-                                        MRURunner.Next = new ModifiedResidueUniProt();
-                                        MRURunner = MRURunner.Next;
-                                        MRURunner.Position = Int32.Parse(InputStream["position"]);
-                                        MRURunner.Modification = Hit ?? PTMList.Synthetic(Desc);
+                                        AddModifiedResidue(ModPosition, PTMCV.Find(Desc) ?? PTMList.Synthetic(Desc));
                                     }
                                     break;
                                 case "modified residue":
-                                    //  <feature type="modified residue" description="N-acetylserine" evidence="6">
-                                    // <feature type="modified residue" description="(Microbial infection) O-acetylthreonine; by Yersinia YopJ; alternate" evidence="31">
-                                    string Description = CleanPtmDescription(InputStream["description"]);
-                                    PTMList CVHit = PTMCV.Find(Description);
-                                    if (CVHit != null)
                                     {
-                                        // Advance to the position in sequence where this occurs
-                                        InputStream.Read();
-                                        InputStream.Read();
-                                        InputStream.Read();
-                                        InputStream.Read();
-                                        MRURunner.Next = new ModifiedResidueUniProt();
-                                        MRURunner = MRURunner.Next;
-                                        MRURunner.Position = Int32.Parse(InputStream["position"]);
-                                        MRURunner.Modification = CVHit;
+                                        string Desc = CleanPtmDescription(FeatureDescription);
+                                        PTMList CVHit = PTMCV.Find(Desc);
+                                        if (CVHit != null) AddModifiedResidue(ModPosition, CVHit);
+                                        else
+                                        {
+                                            Console.WriteLine("Failed to find this modified residue in ptmlist.txt:\t" + Desc);
+                                            Console.WriteLine("Please update your copy of ptmlist.txt from here:");
+                                            Console.WriteLine("https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/docs/ptmlist.txt");
+                                        }
                                     }
-                                    else
-                                    {
-                                        Console.WriteLine("Failed to find this modified residue in ptmlist.txt:\t" + Description);
-                                        Console.WriteLine("Please update your copy of ptmlist.txt from here:");
-                                        Console.WriteLine("https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/docs/ptmlist.txt");
-                                    }
-                                    break;
-                                case "non-standard amino acid":
                                     break;
                             }
                         }
-                        if (RecordSequenceVariations)
+                        if (RecordSequenceVariations && FeatureType == "sequence variant")
                         {
-                            switch (InputStream["type"])
+                            // newSequence is the <variation> (empty = a deletion); the location is a single
+                            // <position> or a <begin>/<end> range. A single-<position> change is VariantSimple
+                            // only when the new residue is exactly one valid amino-acid letter; an insertion,
+                            // a multi-residue change, or a deletion at one point becomes VariantComplex. An
+                            // unknown position is skipped ("?" is ModRes-only, illegal for variants).
+                            string NewSeq = FC.Variation ?? "";
+                            if (FC.HasRange)
                             {
-                                case "sequence conflict":
-                                    break;
-                                case "sequence variant":
-                                    // We don't yet know whether this variant is a simple or a complex
-                                    // Skip to the contents of the Original or Location element.  In 5640, "VAR_083056" is an example of deletion.
-                                    while ((InputStream.Name != "original") && (InputStream.Name != "location"))
-                                    {
-                                        InputStream.Read();
-                                    }
-                                    if (InputStream.Name == "location")
-                                    {
-                                        // This is a deletion
-                                        SVCRunner.Next = new SequenceVariantComplex();
-                                        SVCRunner = SVCRunner.Next;
-                                        SVCRunner.NewSeq = "";
-                                        while ((InputStream.Name != "begin") && (InputStream.Name != "position"))
-                                        {
-                                            InputStream.Read();
-                                        }
-                                        if (InputStream.Name == "position")
-                                        {
-                                            // This affects a single amino acid position
-                                            SVCRunner.Begin = Int32.Parse(InputStream["position"]);
-                                            SVCRunner.End = SVCRunner.Begin;
-                                        }
-                                        else
-                                        {
-                                            // This affects a range of amino acid positions
-                                            SVCRunner.Begin = Int32.Parse(InputStream["position"]);
-                                            while (InputStream.Name != "end")
-                                            {
-                                                InputStream.Read();
-                                            }
-                                            SVCRunner.End = Int32.Parse(InputStream["position"]);
-                                        }
-                                    }
-                                    else
-                                    {
-                                        // This replaces one seq with another
-                                        // We are currently at "original"
-                                        string Original;
-                                        string Variation;
-                                        int    Begin=0;
-                                        int    End=0;
-                                        InputStream.Read();
-                                        Original = InputStream.Value;
-                                        InputStream.Read();
-                                        InputStream.Read();
-                                        InputStream.Read();
-                                        InputStream.Read();
-                                        Variation = InputStream.Value;
-                                        InputStream.Read();
-                                        InputStream.Read();
-                                        InputStream.Read();
-                                        InputStream.Read();
-                                        InputStream.Read();
-                                        if (InputStream.Name == "position")
-                                        {
-                                            // This is a single letter change
-                                            SVSRunner.Next = new SequenceVariantSimple();
-                                            SVSRunner = SVSRunner.Next;
-                                            SVSRunner.NewAA = Variation[0];
-                                            SVSRunner.Position = Int32.Parse(InputStream["position"]);
-                                        }
-                                        else
-                                        {
-                                            // This is a multiple letter change
-                                            Begin = Int32.Parse(InputStream["position"]);
-                                            InputStream.Read();
-                                            InputStream.Read();
-                                            End = Int32.Parse(InputStream["position"]);
-                                            SVCRunner.Next = new SequenceVariantComplex();
-                                            SVCRunner = SVCRunner.Next;
-                                            SVCRunner.NewSeq = Variation;
-                                            SVCRunner.Begin = Begin;
-                                            SVCRunner.End = End;
-                                        }
-                                    }
-                                    break;
+                                if (FC.Begin == null || FC.End == null)
+                                    Console.Error.WriteLine("\tWarning: " + (PERunner.Accession ?? "?") + " sequence variant with unknown range; omitted.");
+                                else
+                                {
+                                    SVCRunner.Next = new SequenceVariantComplex();
+                                    SVCRunner = SVCRunner.Next;
+                                    SVCRunner.Begin = FC.Begin.Value;
+                                    SVCRunner.End = FC.End.Value;
+                                    SVCRunner.NewSeq = NewSeq;
+                                }
+                            }
+                            else if (FC.HasPosition)
+                            {
+                                if (FC.Position == null)
+                                    Console.Error.WriteLine("\tWarning: " + (PERunner.Accession ?? "?") + " sequence variant with unknown position; omitted.");
+                                else if (NewSeq.Length == 1 && IsResidueCode(NewSeq[0]))
+                                {
+                                    SVSRunner.Next = new SequenceVariantSimple();
+                                    SVSRunner = SVSRunner.Next;
+                                    SVSRunner.NewAA = NewSeq[0];
+                                    SVSRunner.Position = FC.Position.Value;
+                                }
+                                else
+                                {
+                                    SVCRunner.Next = new SequenceVariantComplex();
+                                    SVCRunner = SVCRunner.Next;
+                                    SVCRunner.Begin = FC.Position.Value;
+                                    SVCRunner.End = FC.Position.Value;
+                                    SVCRunner.NewSeq = NewSeq;
+                                }
                             }
                         }
                     }
@@ -501,17 +387,19 @@ namespace UniPEFF
         {
             Header.HasAnnotationIdentifiers = AnnotationIdentifiers;
 
-            // A PEFF entry MUST start with >Prefix:DbUniqueId, so entries with no accession are
-            // skipped (with a warning); if that leaves nothing, write no (invalid, empty) PEFF.
+            // A PEFF entry is a description line PLUS a sequence block, and MUST start with
+            // >Prefix:DbUniqueId, so entries lacking an accession OR a sequence are skipped (with a
+            // warning); if that leaves nothing, write no (invalid, empty) PEFF.
             int Writables = 0;
             for (var ER = Entries.Next; ER != null; ER = ER.Next)
             {
-                if (!string.IsNullOrEmpty(ER.Accession)) Writables++;
-                else Console.Error.WriteLine("\tWarning: skipping an entry with no accession.");
+                if (ER.IsWritable()) Writables++;
+                else if (string.IsNullOrEmpty(ER.Accession)) Console.Error.WriteLine("\tWarning: skipping an entry with no accession.");
+                else Console.Error.WriteLine("\tWarning: skipping entry " + ER.Accession + " with no sequence.");
             }
             if (Writables == 0)
             {
-                Console.Error.WriteLine("\tError: no entry has an accession; no PEFF written (a PEFF file must contain >= 1 sequence entry).");
+                Console.Error.WriteLine("\tError: no writable entries; no PEFF written (a PEFF file must contain >= 1 sequence entry).");
                 return;
             }
 
@@ -530,7 +418,7 @@ namespace UniPEFF
             {
                 for (var ER = Entries.Next; ER != null; ER = ER.Next)
                 {
-                    if (string.IsNullOrEmpty(ER.Accession)) continue;
+                    if (!ER.IsWritable()) continue;
                     string P = PEFFentry.PrefixForDataset(ER.DataSet);
                     if (!Prefixes.Contains(P)) Prefixes.Add(P);
                 }
@@ -541,7 +429,7 @@ namespace UniPEFF
             {
                 int Count = 0;
                 for (var ER = Entries.Next; ER != null; ER = ER.Next)
-                    if (!string.IsNullOrEmpty(ER.Accession) && (Single || PEFFentry.PrefixForDataset(ER.DataSet) == P)) Count++;
+                    if (ER.IsWritable() && (Single || PEFFentry.PrefixForDataset(ER.DataSet) == P)) Count++;
                 Header.Prefix = P;
                 Header.NumberOfEntries = Count;
                 WriteDbDescriptionBlock(Writer, Header);
@@ -550,11 +438,11 @@ namespace UniPEFF
             foreach (string P in Prefixes)
             {
                 for (var ER = Entries.Next; ER != null; ER = ER.Next)
-                    if (!string.IsNullOrEmpty(ER.Accession) && (Single || PEFFentry.PrefixForDataset(ER.DataSet) == P))
+                    if (ER.IsWritable() && (Single || PEFFentry.PrefixForDataset(ER.DataSet) == P))
                         Fallbacks += ER.WritePeffEntry(Writer, P, AnnotationIdentifiers, PsiModNames, UnimodNames);
             }
             if (Fallbacks > 0)
-                Console.Error.WriteLine("\tNote: " + Fallbacks + " modification name(s) were not found in the supplied OBO files; emitted the UniProt ptmlist name instead (not strictly the PEFF-required OBO name).");
+                Console.Error.WriteLine("\tWARNING: " + Fallbacks + " ModResPsi/ModResUnimod name(s) had no OBO 'name:' (psi-mod.obo/unimod.obo absent or incomplete); emitted the UniProt ptmlist name instead, which is NOT the strictly PEFF-required OBO name. Place the OBO files in the working directory for conformant output.");
         }
 
         static void WriteFileDescriptionBlock(TextWriter Writer)
@@ -624,6 +512,9 @@ namespace UniPEFF
             if (DataSet == "TrEMBL") return "tr";
             return "sp";   // Swiss-Prot and the safe default
         }
+
+        // A PEFF entry needs both a primary id (for >Prefix:DbUniqueId) and a sequence block.
+        public bool IsWritable() => !string.IsNullOrEmpty(Accession) && !string.IsNullOrEmpty(BaseSequence);
 
         // Map UniProt's <proteinExistence type=> to the PEFF \PE digit (1-5); null if unrecognised.
         public static string ProteinExistenceCode(string Type) => Type switch
@@ -702,7 +593,7 @@ namespace UniPEFF
             string IdPrefix() => AnnotationIdentifiers ? (NextId++) + ":" : "";
 
             Writer.Write(">" + Prefix + ":" + (Accession ?? ""));
-            if (!string.IsNullOrEmpty(FullName))         Tag("PName", "(" + EscapePeff(FullName) + ")");
+            if (!string.IsNullOrEmpty(FullName))         Tag("PName", EscapePeff(FullName));   // single-value key: bare, not a (list)
             if (!string.IsNullOrEmpty(PrimaryGene))      Tag("GName", EscapePeff(PrimaryGene));
             if (!string.IsNullOrEmpty(NcbiTaxId))        Tag("NcbiTaxId", EscapePeff(NcbiTaxId));
             if (!string.IsNullOrEmpty(TaxName))          Tag("TaxName", EscapePeff(TaxName));
@@ -744,7 +635,7 @@ namespace UniPEFF
                     {
                         string OboName = OboNames.Find(Accession);
                         if (OboName != null) DisplayName = OboName;
-                        else if (OboNames.Count > 0) Fallbacks++;
+                        else Fallbacks++;   // count every miss, incl. when the OBO file is entirely absent
                     }
                     if (!string.IsNullOrEmpty(DisplayName)) Builder.Append('|').Append(EscapePeff(DisplayName));
                     Builder.Append(')');
@@ -778,7 +669,7 @@ namespace UniPEFF
                 for (var V = SequenceVariantsComplex.Next; V != null; V = V.Next)
                 {
                     // (b|b|X) single-residue substitution -> VariantSimple; a one-char deletion (b|b|) stays complex.
-                    if (V.Begin != 0 && V.Begin == V.End && V.NewSeq != null && V.NewSeq.Length == 1
+                    if (V.Begin != 0 && V.Begin == V.End && V.NewSeq != null && V.NewSeq.Length == 1 && PEFFmodel.IsResidueCode(V.NewSeq[0])
                         && !(BaseSequence != null && V.Begin > BaseSequence.Length))
                         Builder.Append('(').Append(IdPrefix()).Append(V.Begin).Append('|').Append(EscapePeff(V.NewSeq)).Append(')');
                 }
@@ -796,7 +687,7 @@ namespace UniPEFF
                         Console.Error.WriteLine("\tWarning: " + Accession + " VariantComplex " + V.Begin + "-" + V.End + " is out of bounds (length " + BaseSequence?.Length + "); omitted.");
                         continue;   // spec: positions count from 1 and must lie within the sequence
                     }
-                    if (V.Begin == V.End && V.NewSeq != null && V.NewSeq.Length == 1) continue;   // demoted to VariantSimple
+                    if (V.Begin == V.End && V.NewSeq != null && V.NewSeq.Length == 1 && PEFFmodel.IsResidueCode(V.NewSeq[0])) continue;   // demoted to VariantSimple
                     Builder.Append('(').Append(IdPrefix()).Append(V.Begin).Append('|').Append(V.End).Append('|').Append(EscapePeff(V.NewSeq ?? "")).Append(')');
                 }
                 if (Builder.Length > 0) Tag("VariantComplex", Builder.ToString());
@@ -807,6 +698,11 @@ namespace UniPEFF
                 for (var P = MolecularProcessings.Next; P != null; P = P.Next)
                 {
                     if (P.Begin == 0 || P.End == 0) continue;   // \Processed positions count from 1; "?" is ModRes-only
+                    if (P.Begin > P.End || (BaseSequence != null && (P.Begin > BaseSequence.Length || P.End > BaseSequence.Length)))
+                    {
+                        Console.Error.WriteLine("\tWarning: " + Accession + " Processed " + P.Begin + "-" + P.End + " is out of bounds (length " + BaseSequence?.Length + "); omitted.");
+                        continue;   // spec: positions count from 1 and must lie within the sequence
+                    }
                     Builder.Append('(').Append(IdPrefix()).Append(P.Begin).Append('|').Append(P.End).Append('|').Append(EscapePeff(P.CV ?? "")).Append('|').Append(EscapePeff(P.Type ?? "")).Append(')');
                 }
                 if (Builder.Length > 0) Tag("Processed", Builder.ToString());

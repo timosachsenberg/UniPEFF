@@ -13,8 +13,8 @@
       </recommendedName>
     </protein>
     <gene>
-      <name type="primary">GENE1</name>
       <name type="synonym">SYN1</name>
+      <name type="primary">GENE1</name>
     </gene>
     <organism>
       <name type="scientific">Homo sapiens</name>
@@ -100,6 +100,19 @@
         <end position="201"/>
       </location>
     </feature>
+    <feature type="sequence variant">
+      <original>K</original>
+      <location>
+        <position position="44"/>
+      </location>
+    </feature>
+    <feature type="sequence variant">
+      <original>A</original>
+      <variation>APT</variation>
+      <location>
+        <position position="46"/>
+      </location>
+    </feature>
     <feature type="glycosylation site" description="N-linked (GlcNAc...) asparagine">
       <location>
         <position position="48"/>
@@ -157,6 +170,16 @@
         <position position="70"/>
       </location>
     </feature>
+    <feature type="modified residue" description="Phosphoserine">
+      <location>
+        <position status="unknown"/>
+      </location>
+    </feature>
+    <feature type="glycosylation site" description="O-linked unknown-site">
+      <location>
+        <position status="unknown"/>
+      </location>
+    </feature>
     <feature type="disulfide bond">
       <location>
         <begin position="45"/>
@@ -209,5 +232,10 @@
   <entry dataset="Swiss-Prot">
     <name>NOACC_TEST</name>
     <sequence length="10" mass="1000">MKLDLDTASS</sequence>
+  </entry>
+  <!-- Validation guard: an entry with an accession but NO sequence MUST also be skipped. -->
+  <entry dataset="Swiss-Prot">
+    <accession>P00002</accession>
+    <name>NOSEQ_TEST</name>
   </entry>
 </uniprot>

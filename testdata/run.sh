@@ -12,7 +12,7 @@ DOTNET="${DOTNET:-dotnet}"
 DLL="$ROOT/bin/Debug/net8.0/UniPEFF.dll"
 
 cd "$HERE"   # the tool reads ptmlist.txt from the current working directory
-trap 'rm -f actual_A.peff actual_B.peff' EXIT
+trap 'rm -f actual_A.peff actual_B.peff actual_compact.peff' EXIT
 
 "$DOTNET" "$DLL" -in comprehensive.xml -out actual_A.peff >/dev/null
 "$DOTNET" "$DLL" -in comprehensive.xml -out actual_B.peff -AnnotationIdentifiers >/dev/null
@@ -20,6 +20,15 @@ trap 'rm -f actual_A.peff actual_B.peff' EXIT
 diff -u expected_A.peff actual_A.peff
 diff -u expected_B.peff actual_B.peff
 echo "PASS: PEFF output matches goldens."
+
+# Whitespace independence: compact.xml has no pretty-print whitespace between elements. The
+# name/depth-driven parser MUST still extract the same annotations (the old fixed-Read()-count
+# parser would have crashed or mis-parsed this).
+"$DOTNET" "$DLL" -in compact.xml -out actual_compact.peff >/dev/null
+for want in '>sp:P00003' '\GName=CGENE' '\ModResPsi=(3|MOD:00046|O-phospho-L-serine)' '\VariantSimple=(5|V)' '\Processed=(1|4|PEFF:0001021|signal peptide)'; do
+  grep -qF -- "$want" actual_compact.peff || { echo "FAIL: compact.xml output missing: $want"; exit 1; }
+done
+echo "PASS: compact (whitespace-stripped) XML parses identically."
 
 # Spec-conformance assertions, independent of the goldens:
 #  - the DB description block MUST contain DbVersion (PEFF 1.0 section 3.3.2)
