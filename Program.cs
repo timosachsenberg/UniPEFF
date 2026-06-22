@@ -36,6 +36,7 @@ namespace UniPEFF
             SequenceVariantSimple  SVSRunner = null;
             SequenceVariantComplex SVCRunner = null;
             LinkedModifications    DSLMRunner = null;
+            AltAccession           AAARunner = null;
             while (InputStream.Read())
             {
                 var ThisNodeType = InputStream.NodeType;
@@ -52,16 +53,21 @@ namespace UniPEFF
                         DSLMRunner = PERunner.Disulfides;
                         SVSRunner = PERunner.SequenceVariantsSimple;
                         SVCRunner = PERunner.SequenceVariantsComplex;
+                        AAARunner = PERunner.AltAccessions;
                         PERunner.DataSet = InputStream["dataset"];
+                        PERunner.EntryVersion = InputStream["version"];
                     }
                     else if (InputStream.Name == "accession")
                     {
-                        // Many accessions are possible for a UniProtKB entry; keep just the first
-                        if (PERunner.Accession == null)
+                        // The first accession is the primary id (in >Prefix:Accession); the rest -> \AltAC.
+                        if (InputStream.Read())
                         {
-                            if (InputStream.Read())
+                            if (PERunner.Accession == null) PERunner.Accession = InputStream.Value;
+                            else
                             {
-                                PERunner.Accession = InputStream.Value;
+                                AAARunner.Next = new AltAccession();
+                                AAARunner = AAARunner.Next;
+                                AAARunner.Accession = InputStream.Value;
                             }
                         }
                     }
@@ -103,7 +109,32 @@ namespace UniPEFF
                     }
                     else if ((InputStream.Name == "sequence") && (InputStream["length"] != null))
                     {
+                        PERunner.SequenceVersion = InputStream["version"];
                         if (InputStream.Read()) PERunner.BaseSequence = InputStream.Value;
+                    }
+                    else if (InputStream.Name == "organism")
+                    {
+                        // Bounded scan of the <organism> subtree: capture the scientific <name> (in any
+                        // order) and the NCBI Taxonomy id, stopping at </organism> so we never walk into
+                        // the entry body, and so the organism's own <name> elements cannot leak back to
+                        // the bare "name" branch above.
+                        int OrganismDepth = InputStream.Depth;
+                        while (InputStream.Read() && !(InputStream.NodeType == XmlNodeType.EndElement && InputStream.Depth == OrganismDepth))
+                        {
+                            if (InputStream.NodeType != XmlNodeType.Element) continue;
+                            if (InputStream.Name == "name" && InputStream["type"] == "scientific" && PERunner.TaxName == null)
+                            {
+                                if (InputStream.Read()) PERunner.TaxName = InputStream.Value;
+                            }
+                            else if (InputStream.Name == "dbReference" && InputStream["type"] == "NCBI Taxonomy")
+                            {
+                                PERunner.NcbiTaxId = InputStream["id"];
+                            }
+                        }
+                    }
+                    else if (InputStream.Name == "proteinExistence")
+                    {
+                        PERunner.ProteinExistence = PEFFentry.ProteinExistenceCode(InputStream["type"]);
                     }
                     if (InputStream.Name == "feature")
                     {
@@ -504,6 +535,16 @@ namespace UniPEFF
             Writer.Write("# //\n");
         }
     }
+    class AltAccession
+    {
+        public string Accession;
+        public AltAccession Next = null;
+        public void DebugPrint()
+        {
+            AltAccession Runner = this.Next;
+            while (Runner != null) { Console.WriteLine("AltAccession\t" + Runner.Accession); Runner = Runner.Next; }
+        }
+    }
     class PEFFentry
     {
         public string DataSet;
@@ -512,6 +553,12 @@ namespace UniPEFF
         public string FullName;
         public string PrimaryGene;
         public string BaseSequence;
+        public string NcbiTaxId;          // NCBI taxonomy id, e.g. "9606"
+        public string TaxName;            // scientific organism name, e.g. "Homo sapiens"
+        public string SequenceVersion;    // <sequence version=> -> \SV
+        public string EntryVersion;       // <entry version=>    -> \EV
+        public string ProteinExistence;   // PE digit "1".."5"   -> \PE
+        public AltAccession AltAccessions = new AltAccession();   // secondary accessions -> \AltAC
         public MolecularProcessing MolecularProcessings = new MolecularProcessing();
         public ModifiedResidueUniProt ModifiedResiduesUniProt = new ModifiedResidueUniProt();
         public ModifiedResidueUniProt ModifiedResiduesDisulfide = new ModifiedResidueUniProt();
@@ -533,6 +580,17 @@ namespace UniPEFF
             if (DataSet == "TrEMBL") return "tr";
             return "sp";   // Swiss-Prot and the safe default
         }
+
+        // Map UniProt's <proteinExistence type=> to the PEFF \PE digit (1-5); null if unrecognised.
+        public static string ProteinExistenceCode(string Type) => Type switch
+        {
+            "evidence at protein level"    => "1",
+            "evidence at transcript level" => "2",
+            "inferred from homology"       => "3",
+            "predicted"                    => "4",
+            "uncertain"                    => "5",
+            _ => null,
+        };
 
         // Make text PEFF-safe. PEFF requires ASCII, so non-ASCII is transliterated/stripped first
         // (ToAscii). Then reserved characters are escaped -- but per the spec only "|", "\" and
@@ -600,13 +658,25 @@ namespace UniPEFF
             string IdPrefix() => AnnotationIdentifiers ? (NextId++) + ":" : "";
 
             Writer.Write(">" + Prefix + ":" + (Accession ?? ""));
-            if (!string.IsNullOrEmpty(FullName))     Tag("PName", "(" + EscapePeff(FullName) + ")");
-            if (!string.IsNullOrEmpty(PrimaryGene))  Tag("GName", EscapePeff(PrimaryGene));
-            if (!string.IsNullOrEmpty(BaseSequence)) Tag("Length", BaseSequence.Length.ToString());
+            if (!string.IsNullOrEmpty(FullName))         Tag("PName", "(" + EscapePeff(FullName) + ")");
+            if (!string.IsNullOrEmpty(PrimaryGene))      Tag("GName", EscapePeff(PrimaryGene));
+            if (!string.IsNullOrEmpty(NcbiTaxId))        Tag("NcbiTaxId", EscapePeff(NcbiTaxId));
+            if (!string.IsNullOrEmpty(TaxName))          Tag("TaxName", EscapePeff(TaxName));
+            if (!string.IsNullOrEmpty(BaseSequence))     Tag("Length", BaseSequence.Length.ToString());
+            if (!string.IsNullOrEmpty(SequenceVersion))  Tag("SV", EscapePeff(SequenceVersion));
+            if (!string.IsNullOrEmpty(EntryVersion))     Tag("EV", EscapePeff(EntryVersion));
+            if (!string.IsNullOrEmpty(ProteinExistence)) Tag("PE", ProteinExistence);
             // \DbUniqueId is intentionally NOT emitted: the PSI-MS CV (PEFF:0001001) states it
             // "shall not be used in the PEFF 1.0 serialization as it is redundant with the primary
             // identifier following the >".
-            if (!string.IsNullOrEmpty(Name))         Tag("ID", EscapePeff(Name));
+            if (!string.IsNullOrEmpty(Name))             Tag("ID", EscapePeff(Name));
+            {
+                // Secondary accessions as one \AltAC=(ac)(ac) list (a key MUST NOT appear twice).
+                var AltBuilder = new StringBuilder();
+                for (var A = AltAccessions.Next; A != null; A = A.Next)
+                    AltBuilder.Append('(').Append(EscapePeff(A.Accession)).Append(')');
+                if (AltBuilder.Length > 0) Tag("AltAC", AltBuilder.ToString());
+            }
 
             // Modified residues split into the three PEFF namespaces, emitted (and numbered) in
             // the order PSI-MOD, Unimod, generic. Each node's id is recorded so \DisulfideBond

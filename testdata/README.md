@@ -21,10 +21,12 @@ folder. If a code change *intentionally* alters output, regenerate the goldens w
 
 Entry **P12345** (Swiss-Prot) is a deliberate "kitchen sink":
 
-- **Entry fields:** two accessions (only the first is kept), mnemonic, a fullName mixing
-  paired and unpaired parens plus `|` and `\` (escaping: only `|`, `\` and *unpaired* parens
-  are backslash-escaped; balanced parens are left intact), and a gene with a synonym (only
-  the primary name is kept).
+- **Entry fields:** organism (`\NcbiTaxId`/`\TaxName`, with a `<name type="common">` before the
+  taxonomy reference to exercise the bounded organism scan), sequence/entry versions
+  (`\SV`/`\EV`), protein existence (`\PE`); two accessions (the first is the primary id, the
+  second becomes `\AltAC`); mnemonic (`\ID`); a fullName mixing paired and unpaired parens plus
+  `|` and `\` (escaping: only `|`, `\` and *unpaired* parens are backslash-escaped; balanced
+  parens are left intact); and a gene with a synonym (only the primary name is kept).
 - **Molecular processing:** all five types → their PEFF CVs — initiator methionine (single
   position), signal peptide, transit peptide, propeptide, chain; plus an unknown-position
   processing feature that MUST be omitted (`\Processed` positions count from 1; "?" is

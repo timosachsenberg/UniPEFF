@@ -3,7 +3,7 @@
      processing types, every modification routing, all disulfide shapes, every variant
      shape, unhandled feature types) and every writer path. See README.md. -->
 <uniprot>
-  <entry dataset="Swiss-Prot">
+  <entry dataset="Swiss-Prot" version="64">
     <accession>P12345</accession>
     <accession>P99999</accession>
     <name>KSINK_HUMAN</name>
@@ -16,6 +16,12 @@
       <name type="primary">GENE1</name>
       <name type="synonym">SYN1</name>
     </gene>
+    <organism>
+      <name type="scientific">Homo sapiens</name>
+      <name type="common">Human</name>
+      <dbReference type="NCBI Taxonomy" id="9606"/>
+    </organism>
+    <proteinExistence type="evidence at protein level"/>
     <feature type="initiator methionine">
       <location>
         <position position="1"/>
@@ -158,16 +164,22 @@
         <end position="40"/>
       </location>
     </feature>
-    <sequence length="100" mass="11000">MSEQNNTEMTFQIQRIYTKDISFEAPNAPHVFQKDWQPEVKLDLDTASSQLADDVYEVVLRVTVTASLGEETAFLCEVQQGGKLMNPQRSTVWYACDEFG</sequence>
+    <sequence length="100" mass="11000" version="3">MSEQNNTEMTFQIQRIYTKDISFEAPNAPHVFQKDWQPEVKLDLDTASSQLADDVYEVVLRVTVTASLGEETAFLCEVQQGGKLMNPQRSTVWYACDEFG</sequence>
   </entry>
-  <entry dataset="TrEMBL">
+  <entry dataset="TrEMBL" version="2">
     <accession>Q67890</accession>
+    <accession>Q00001</accession>
     <name>MINI_HUMAN</name>
     <protein>
       <recommendedName>
         <fullName>Minimal TrEMBL entry &#946;&#233;</fullName>
       </recommendedName>
     </protein>
-    <sequence length="31" mass="3000">MKLDLDTASSQLADDVYEVVLRVTVTASLGE</sequence>
+    <organism>
+      <name type="scientific">Homo sapiens</name>
+      <dbReference type="NCBI Taxonomy" id="9606"/>
+    </organism>
+    <proteinExistence type="predicted"/>
+    <sequence length="31" mass="3000" version="1">MKLDLDTASSQLADDVYEVVLRVTVTASLGE</sequence>
   </entry>
 </uniprot>
