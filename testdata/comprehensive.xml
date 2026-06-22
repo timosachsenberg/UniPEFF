@@ -141,6 +141,6 @@
         <fullName>Minimal TrEMBL entry</fullName>
       </recommendedName>
     </protein>
-    <sequence length="30" mass="3000">MKLDLDTASSQLADDVYEVVLRVTVTASLGE</sequence>
+    <sequence length="31" mass="3000">MKLDLDTASSQLADDVYEVVLRVTVTASLGE</sequence>
   </entry>
 </uniprot>

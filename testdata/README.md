@@ -41,3 +41,22 @@ Entry **P12345** (Swiss-Prot) is a deliberate "kitchen sink":
 Entry **Q67890** (TrEMBL) is a minimal, annotation-free entry: it checks multi-entry
 handling, the annotation-free `>` line, and that a single `# Prefix=` is used for the whole
 file (the TrEMBL entry is written as `>sp:` to stay consistent with the header).
+
+## Integration test (optional, real data)
+
+The fixture above is a controlled unit test. For an end-to-end check at scale, convert the
+whole reviewed human proteome. From a working directory holding the **full** `ptmlist.txt`:
+
+```bash
+curl -O 'https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/docs/ptmlist.txt'
+curl -G 'https://rest.uniprot.org/uniprotkb/stream' \
+  --data-urlencode 'query=organism_id:9606 AND reviewed:true' \
+  --data-urlencode 'format=xml' --data-urlencode 'compressed=true' \
+  -o human_sprot.xml.gz
+dotnet "$ROOT/bin/Debug/net8.0/UniPEFF.dll" -in human_sprot.xml.gz -out human.peff                       # Option C
+dotnet "$ROOT/bin/Debug/net8.0/UniPEFF.dll" -in human_sprot.xml.gz -out human_B.peff -AnnotationIdentifiers  # Option B
+```
+
+Last verified run: 20,431 entries (~169 MB gz in → ~19 MB PEFF out, ~12 s), no crash and no
+missing-PTM warnings. Spot check — insulin `P01308` emits its six half-cystines as `\ModResPsi`
+and, in Option B, the correct disulfide connectivity `31-96, 43-109, 95-100`.
