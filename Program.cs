@@ -401,7 +401,7 @@ namespace UniPEFF
             return ThisPEFF;
         }
 
-        public void WritePeff(TextWriter Writer, PeffHeader Header, string PrefixOverride, bool AnnotationIdentifiers)
+        public void WritePeff(TextWriter Writer, PeffHeader Header, string PrefixOverride, bool AnnotationIdentifiers, OboNameMap PsiModNames, OboNameMap UnimodNames)
         {
             int EntryCount = 0;
             for (var ER = Entries.Next; ER != null; ER = ER.Next) EntryCount++;
@@ -412,10 +412,13 @@ namespace UniPEFF
             if (!string.IsNullOrEmpty(PrefixOverride)) Header.Prefix = PrefixOverride;
             else if (Entries.Next != null) Header.Prefix = PEFFentry.PrefixForDataset(Entries.Next.DataSet);
             WritePeffHeader(Writer, Header);
+            int Fallbacks = 0;
             for (var ER = Entries.Next; ER != null; ER = ER.Next)
             {
-                ER.WritePeffEntry(Writer, Header.Prefix, AnnotationIdentifiers);
+                Fallbacks += ER.WritePeffEntry(Writer, Header.Prefix, AnnotationIdentifiers, PsiModNames, UnimodNames);
             }
+            if (Fallbacks > 0)
+                Console.Error.WriteLine("\tNote: " + Fallbacks + " modification name(s) were not found in the supplied OBO files; emitted the UniProt ptmlist name instead (not strictly the PEFF-required OBO name).");
         }
 
         static void WritePeffHeader(TextWriter Writer, PeffHeader Header)
@@ -521,10 +524,11 @@ namespace UniPEFF
         // emitted as \DisulfideBond referencing the two half-cystine annotation ids (PEFF
         // "Option B"). Otherwise half cystines are written as plain ModResPsi and no bond
         // connectivity is emitted (PEFF "Option C", matching UniProt/neXtProt bulk exports).
-        public void WritePeffEntry(TextWriter Writer, string Prefix, bool AnnotationIdentifiers)
+        public int WritePeffEntry(TextWriter Writer, string Prefix, bool AnnotationIdentifiers, OboNameMap PsiModNames, OboNameMap UnimodNames)
         {
             const int SequenceWidth = 60;
             int NextId = 0;
+            int Fallbacks = 0;
             var ResidueId = new Dictionary<ModifiedResidueUniProt, int>();
 
             void Tag(string Key, string ValueText) => Writer.Write(" \\" + Key + "=" + ValueText);
@@ -534,13 +538,15 @@ namespace UniPEFF
             if (!string.IsNullOrEmpty(FullName))     Tag("PName", "(" + EscapePeff(FullName) + ")");
             if (!string.IsNullOrEmpty(PrimaryGene))  Tag("GName", EscapePeff(PrimaryGene));
             if (!string.IsNullOrEmpty(BaseSequence)) Tag("Length", BaseSequence.Length.ToString());
-            if (!string.IsNullOrEmpty(Accession))    Tag("DbUniqueId", EscapePeff(Accession));
+            // \DbUniqueId is intentionally NOT emitted: the PSI-MS CV (PEFF:0001001) states it
+            // "shall not be used in the PEFF 1.0 serialization as it is redundant with the primary
+            // identifier following the >".
             if (!string.IsNullOrEmpty(Name))         Tag("ID", EscapePeff(Name));
 
             // Modified residues split into the three PEFF namespaces, emitted (and numbered) in
             // the order PSI-MOD, Unimod, generic. Each node's id is recorded so \DisulfideBond
             // can reference the half cystines by id.
-            void WriteMods(string Key, Func<ModifiedResidueUniProt, bool> Belongs, Func<ModifiedResidueUniProt, string> AccessionOf)
+            void WriteMods(string Key, Func<ModifiedResidueUniProt, bool> Belongs, Func<ModifiedResidueUniProt, string> AccessionOf, OboNameMap OboNames)
             {
                 var Builder = new StringBuilder();
                 for (var M = ModifiedResiduesUniProt.Next; M != null; M = M.Next)
@@ -549,8 +555,18 @@ namespace UniPEFF
                     Builder.Append('(');
                     if (AnnotationIdentifiers) { ResidueId[M] = NextId; Builder.Append(NextId + ":"); NextId++; }
                     Builder.Append(Pos(M.Position));
-                    Builder.Append('|').Append(EscapePeff(AccessionOf(M)));
+                    string Accession = AccessionOf(M);
+                    Builder.Append('|').Append(EscapePeff(Accession));
+                    // PEFF requires the OBO "name:" field for ModResPsi/ModResUnimod (spec sec 3.4),
+                    // not the UniProt ptmlist ID. Resolve it from the loaded CV; on a miss fall back
+                    // to the UniProt ID (an empty name is illegal).
                     string DisplayName = M.Modification != null ? (M.Modification.ID ?? "") : "";
+                    if (OboNames != null)
+                    {
+                        string OboName = OboNames.Find(Accession);
+                        if (OboName != null) DisplayName = OboName;
+                        else if (OboNames.Count > 0) Fallbacks++;
+                    }
                     if (!string.IsNullOrEmpty(DisplayName)) Builder.Append('|').Append(EscapePeff(DisplayName));
                     Builder.Append(')');
                 }
@@ -558,13 +574,13 @@ namespace UniPEFF
             }
             WriteMods("ModResPsi",
                       M => M.Modification != null && !string.IsNullOrEmpty(M.Modification.PSIModAccession),
-                      M => M.Modification.PSIModAccession);
+                      M => M.Modification.PSIModAccession, PsiModNames);
             WriteMods("ModResUnimod",
                       M => M.Modification != null && string.IsNullOrEmpty(M.Modification.PSIModAccession) && !string.IsNullOrEmpty(M.Modification.UnimodAccession),
-                      M => "UNIMOD:" + M.Modification.UnimodAccession);
+                      M => "UNIMOD:" + M.Modification.UnimodAccession, UnimodNames);
             WriteMods("ModRes",
                       M => M.Modification == null || (string.IsNullOrEmpty(M.Modification.PSIModAccession) && string.IsNullOrEmpty(M.Modification.UnimodAccession)),
-                      M => "");
+                      M => "", null);
 
             // Simple (single-residue) variants
             {
@@ -614,6 +630,7 @@ namespace UniPEFF
             string Sequence = BaseSequence ?? "";
             for (int Offset = 0; Offset < Sequence.Length; Offset += SequenceWidth)
                 Writer.Write(Sequence.Substring(Offset, Math.Min(SequenceWidth, Sequence.Length - Offset)) + "\n");
+            return Fallbacks;
         }
 
         public void DebugPrint ()
@@ -851,6 +868,40 @@ namespace UniPEFF
             }
         }
     }
+    // Maps a CV accession (e.g. "MOD:00046" or "UNIMOD:34") to its OBO "name:" field, loaded from
+    // a standard .obo file in the working directory. PEFF requires the OBO name for ModResPsi /
+    // ModResUnimod (not the UniProt synonym). Absence-tolerant: a missing file leaves the map empty
+    // and the writer falls back to the UniProt ptmlist ID.
+    class OboNameMap
+    {
+        readonly Dictionary<string, string> Names = new Dictionary<string, string>();
+        public int Count => Names.Count;
+        public string Find(string Accession)
+            => (Accession != null && Names.TryGetValue(Accession, out var Name)) ? Name : null;
+        public void ReadFromFile(string Filename)
+        {
+            try
+            {
+                using var Reader = new StreamReader(Filename);
+                string Id = null, Line;
+                bool InTerm = false;   // only ingest [Term] stanzas, never [Typedef]/[Instance]
+                while ((Line = Reader.ReadLine()) != null)
+                {
+                    if (Line.StartsWith("[")) { InTerm = Line.StartsWith("[Term]"); Id = null; }
+                    else if (InTerm && Line.StartsWith("id: ")) Id = Line.Substring(4).Trim();
+                    else if (InTerm && Line.StartsWith("name: ") && Id != null)
+                    {
+                        // Obsolete terms are kept on purpose: for an accession UniProt references,
+                        // the OBO name: (obsolete or not) is the value PEFF requires; dropping it
+                        // would force a UniProt-synonym fallback, the very thing we are fixing.
+                        if (!Names.ContainsKey(Id)) Names[Id] = Line.Substring(6).Trim();
+                        Id = null;
+                    }
+                }
+            }
+            catch (IOException) { /* absent file -> empty map -> writer falls back to UniProt IDs */ }
+        }
+    }
     class PeffHeader
     {
         public string DbName = "UniProtKB";
@@ -885,6 +936,8 @@ namespace UniPEFF
             string UserDbVersion = null;
             var AnnotationIdentifiers = false;
             var PTMCV = new PTMList();
+            var PsiModNames = new OboNameMap();
+            var UnimodNames = new OboNameMap();
             foreach (var item in args)
             {
                 if (NextIsInput)
@@ -948,6 +1001,9 @@ namespace UniPEFF
                 Console.WriteLine("Reading ptmlist.txt from current directory.");
                 PTMCV.ReadPTMListFromFile();
                 PTMCV.DebugPrint();
+                PsiModNames.ReadFromFile("psi-mod.obo");
+                UnimodNames.ReadFromFile("unimod.obo");
+                Console.WriteLine("OBO names loaded from current directory: psi-mod " + PsiModNames.Count + ", unimod " + UnimodNames.Count + " (absent files tolerated; names then fall back to UniProt IDs).");
             }
             Console.WriteLine("Input file is " + InputFile);
             PEFFmodel UniProtDB = null;
@@ -979,7 +1035,7 @@ namespace UniPEFF
                 using var PeffWriter = new StreamWriter(OutputFile);
                 var Header = new PeffHeader();
                 if (!string.IsNullOrEmpty(UserDbVersion)) Header.DbVersion = UserDbVersion;
-                UniProtDB.WritePeff(PeffWriter, Header, UserPrefix, AnnotationIdentifiers);
+                UniProtDB.WritePeff(PeffWriter, Header, UserPrefix, AnnotationIdentifiers, PsiModNames, UnimodNames);
             }
         }
     }
