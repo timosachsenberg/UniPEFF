@@ -20,3 +20,7 @@ DR   Unimod; 34.
 ID   Test generic mod no accession
 AC   PTM-9002
 //
+ID   Test palmitoyl cysteine
+AC   PTM-9003
+DR   PSI-MOD; MOD:00999.
+//

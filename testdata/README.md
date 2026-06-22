@@ -30,8 +30,15 @@ Entry **P12345** (Swiss-Prot) is a deliberate "kitchen sink":
   processing feature that MUST be omitted (`\Processed` positions count from 1; "?" is
   ModRes-only).
 - **Modifications:** PSI-MOD (`\ModResPsi`), Unimod-only (`\ModResUnimod`), generic
-  no-accession (`\ModRes`); the `(Microbial infection)` and `;`-suffix description strips;
-  and a description absent from `ptmlist.txt` (warns, produces no output, does not crash).
+  no-accession (`\ModRes`), with names resolved from the bundled `psi-mod.obo`/`unimod.obo`
+  (PEFF requires the OBO `name:`, e.g. `O-phospho-L-serine`, not the UniProt synonym); the
+  `(Microbial infection)` and `;`-suffix description strips; and a description absent from
+  `ptmlist.txt` (warns, produces no output, does not crash).
+- **Glycosylation / lipidation / cross-links → modifications:** a glycosylation site with an
+  embedded paired-paren description (`N-linked (GlcNAc...)`, left unescaped) and one with no
+  description (name falls back to the feature type); a lipidation matching `ptmlist.txt`
+  (→ `\ModResPsi`) and one that does not (→ generic `\ModRes`); a single-position cross-link
+  and an intra-chain begin/end cross-link (→ two `\ModRes` residues).
 - **Disulfides:** two-ended (45–80), unknown begin (→ position 0 → `?`, …90) and single-ended
   cross-chain (95). Verifies the half-cystine merge feeds `\ModResPsi` position-sorted and,
   in Option B, that `\DisulfideBond` references the correct half-cystine ids — including the
@@ -39,7 +46,7 @@ Entry **P12345** (Swiss-Prot) is a deliberate "kitchen sink":
   `\ModResPsi`-only.
 - **Variants:** simple (25), complex replacement (30–31), single-residue deletion (33), range
   deletion (36–38).
-- **Unhandled feature types** (`glycosylation site`, `sequence conflict`, `cross-link`) are
+- **Still-unhandled feature types** (`sequence conflict`, `non-standard amino acid`) are
   parsed without error and produce no output.
 
 Entry **Q67890** (TrEMBL) is a minimal, annotation-free entry: it checks multi-entry

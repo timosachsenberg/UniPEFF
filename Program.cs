@@ -14,6 +14,17 @@ namespace UniPEFF
     {
         string Source;
         PEFFentry Entries = new PEFFentry();
+        // Strip UniProt's "(Microbial infection) " prefix and any trailing "; ..." qualifier from a
+        // PTM description, matching the long-standing logic in the "modified residue" case.
+        static string CleanPtmDescription(string Description)
+        {
+            if (string.IsNullOrEmpty(Description)) return Description;
+            if (Description.StartsWith("(Microbial infection)")) Description = Description.Substring(22);
+            int SemiPosition = Description.IndexOf(';');
+            if (SemiPosition > -1) Description = Description.Substring(0, SemiPosition);
+            return Description;
+        }
+
         public static PEFFmodel FromUniProtXML(XmlReader InputStream, bool RecordMolecularProcessing, bool RecordAminoAcidModifications, bool RecordSequenceVariations, PTMList PTMCV)
         {
             Console.WriteLine("Reading XML...");
@@ -205,7 +216,42 @@ namespace UniPEFF
                             switch (InputStream["type"])
                             {
                                 case "cross-link":
-                                    // two positions!
+                                    // Isopeptide cross-link (e.g. ubiquitin/SUMO). A single <position>
+                                    // is the common inter-chain case; <begin>/<end> is intra-chain. PEFF
+                                    // has no generic cross-link-bond key, so we annotate the modified
+                                    // residue(s) by position and do not pair them. Route to \ModResPsi/
+                                    // \ModResUnimod when the description is a known ptmlist PTM, else \ModRes.
+                                    {
+                                        string Desc = CleanPtmDescription(InputStream["description"]);
+                                        if (string.IsNullOrEmpty(Desc)) Desc = "cross-link";
+                                        PTMList XLink = PTMCV.Find(Desc) ?? PTMList.Synthetic(Desc);
+                                        InputStream.Read();
+                                        InputStream.Read();
+                                        InputStream.Read();
+                                        InputStream.Read();
+                                        if (InputStream.Name == "position")
+                                        {
+                                            MRURunner.Next = new ModifiedResidueUniProt();
+                                            MRURunner = MRURunner.Next;
+                                            MRURunner.Position = Int32.Parse(InputStream["position"]);
+                                            MRURunner.Modification = XLink;
+                                        }
+                                        else
+                                        {
+                                            MRURunner.Next = new ModifiedResidueUniProt();
+                                            MRURunner = MRURunner.Next;
+                                            try { MRURunner.Position = Int32.Parse(InputStream["position"]); }
+                                            catch (ArgumentNullException) { MRURunner.Position = 0; }
+                                            MRURunner.Modification = XLink;
+                                            InputStream.Read();
+                                            InputStream.Read();
+                                            MRURunner.Next = new ModifiedResidueUniProt();
+                                            MRURunner = MRURunner.Next;
+                                            try { MRURunner.Position = Int32.Parse(InputStream["position"]); }
+                                            catch (ArgumentNullException) { MRURunner.Position = 0; }
+                                            MRURunner.Modification = XLink;
+                                        }
+                                    }
                                     break;
                                 case "disulfide bond":
                                     // If a "begin" and "end" are supplied, the disulfide links two sites in the same chain.
@@ -262,23 +308,42 @@ namespace UniPEFF
                                     }
                                     break;
                                 case "glycosylation site":
+                                    // Glycan compositions are not in PSI-MOD/Unimod, so emit a generic
+                                    // \ModRes carrying the UniProt description (e.g. "N-linked (GlcNAc...)").
+                                    {
+                                        string Desc = CleanPtmDescription(InputStream["description"]);
+                                        if (string.IsNullOrEmpty(Desc)) Desc = "glycosylation site";
+                                        InputStream.Read();
+                                        InputStream.Read();
+                                        InputStream.Read();
+                                        InputStream.Read();
+                                        MRURunner.Next = new ModifiedResidueUniProt();
+                                        MRURunner = MRURunner.Next;
+                                        MRURunner.Position = Int32.Parse(InputStream["position"]);
+                                        MRURunner.Modification = PTMList.Synthetic(Desc);
+                                    }
                                     break;
                                 case "lipid moiety-binding region":
+                                    // Lipidation: route to \ModResPsi/\ModResUnimod if the description is a
+                                    // known ptmlist PTM, else a generic \ModRes.
+                                    {
+                                        string Desc = CleanPtmDescription(InputStream["description"]);
+                                        if (string.IsNullOrEmpty(Desc)) Desc = "lipid moiety-binding region";
+                                        PTMList Hit = PTMCV.Find(Desc);
+                                        InputStream.Read();
+                                        InputStream.Read();
+                                        InputStream.Read();
+                                        InputStream.Read();
+                                        MRURunner.Next = new ModifiedResidueUniProt();
+                                        MRURunner = MRURunner.Next;
+                                        MRURunner.Position = Int32.Parse(InputStream["position"]);
+                                        MRURunner.Modification = Hit ?? PTMList.Synthetic(Desc);
+                                    }
                                     break;
                                 case "modified residue":
                                     //  <feature type="modified residue" description="N-acetylserine" evidence="6">
                                     // <feature type="modified residue" description="(Microbial infection) O-acetylthreonine; by Yersinia YopJ; alternate" evidence="31">
-                                    string Description = InputStream["description"];
-                                    // Fix a weird mistake in PTM formatting from UniProtKB.
-                                    if (Description.StartsWith("(Microbial infection)"))
-                                    {
-                                        Description = Description.Substring(22);
-                                    }
-                                    int     SemiPosition = Description.IndexOf(';');
-                                    if (SemiPosition > -1)
-                                    {
-                                        Description = Description.Substring(0, SemiPosition);
-                                    }
+                                    string Description = CleanPtmDescription(InputStream["description"]);
                                     PTMList CVHit = PTMCV.Find(Description);
                                     if (CVHit != null)
                                     {
@@ -788,6 +853,11 @@ namespace UniPEFF
         public string  PSIModAccession;
         public string  UnimodAccession;
         public PTMList Next;
+
+        // A description-only "modification" with no CV accession, used for UniProt feature types
+        // (glycosylation, cross-link, unmatched lipidation) that map to a generic \ModRes.
+        public static PTMList Synthetic(string Description)
+            => new PTMList { ID = Description, Accession = "", PSIModAccession = null, UnimodAccession = null };
 
         public PTMList Find(string Description)
         {

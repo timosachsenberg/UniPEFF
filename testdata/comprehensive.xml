@@ -71,9 +71,29 @@
         <end position="38"/>
       </location>
     </feature>
-    <feature type="glycosylation site">
+    <feature type="glycosylation site" description="N-linked (GlcNAc...) asparagine">
       <location>
         <position position="48"/>
+      </location>
+    </feature>
+    <feature type="glycosylation site">
+      <location>
+        <position position="68"/>
+      </location>
+    </feature>
+    <feature type="lipid moiety-binding region" description="Test palmitoyl cysteine">
+      <location>
+        <position position="58"/>
+      </location>
+    </feature>
+    <feature type="lipid moiety-binding region" description="Some unlisted lipid">
+      <location>
+        <position position="62"/>
+      </location>
+    </feature>
+    <feature type="cross-link" description="Glycyl lysine isopeptide (Lys-Gly) (interchain with G-Cter in ubiquitin)">
+      <location>
+        <position position="66"/>
       </location>
     </feature>
     <feature type="modified residue" description="Phosphoserine">
@@ -114,7 +134,7 @@
         <end position="80"/>
       </location>
     </feature>
-    <feature type="cross-link">
+    <feature type="cross-link" description="Isopeptide (Cys-Lys)">
       <location>
         <begin position="88"/>
         <end position="89"/>

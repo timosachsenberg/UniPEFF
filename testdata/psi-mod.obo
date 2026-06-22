@@ -15,3 +15,7 @@ name: O-phospho-L-threonine
 [Term]
 id: MOD:00798
 name: half cystine
+
+[Term]
+id: MOD:00999
+name: S-palmitoyl-L-cysteine
