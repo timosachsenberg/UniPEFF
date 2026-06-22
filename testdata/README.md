@@ -65,10 +65,15 @@ override instead collapses everything into one block), and non-ASCII text in the
 ## Integration test (optional, real data)
 
 The fixture above is a controlled unit test. For an end-to-end check at scale, convert the
-whole reviewed human proteome. From a working directory holding the **full** `ptmlist.txt`:
+whole reviewed human proteome. The tool reads `ptmlist.txt`, `psi-mod.obo` and `unimod.obo`
+from the working directory; the OBO files supply the canonical modification names PEFF
+requires — **without them, mod names fall back to the UniProt `ptmlist.txt` IDs** (a warning
+is printed and the output is not strictly OBO-named). Download all three plus the proteome:
 
 ```bash
 curl -O 'https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/docs/ptmlist.txt'
+curl -fsSL 'https://raw.githubusercontent.com/HUPO-PSI/psi-mod-CV/master/PSI-MOD.obo' -o psi-mod.obo
+curl -O 'http://www.unimod.org/obo/unimod.obo'
 curl -G 'https://rest.uniprot.org/uniprotkb/stream' \
   --data-urlencode 'query=organism_id:9606 AND reviewed:true' \
   --data-urlencode 'format=xml' --data-urlencode 'compressed=true' \
