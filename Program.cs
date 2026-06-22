@@ -427,8 +427,8 @@ namespace UniPEFF
             Writer.Write("# Prefix=" + Header.Prefix + "\n");
             if (!string.IsNullOrEmpty(Header.DbDescription)) Writer.Write("# DbDescription=" + Header.DbDescription + "\n");
             Writer.Write("# Decoy=false\n");
-            if (!string.IsNullOrEmpty(Header.DbSource)) Writer.Write("# DbSource=" + Header.DbSource + "\n");
-            if (!string.IsNullOrEmpty(Header.DbVersion)) Writer.Write("# DbVersion=" + Header.DbVersion + "\n");
+            Writer.Write("# DbSource=" + Header.DbSource + "\n");      // mandatory per PEFF 1.0 sec 3.3.2
+            Writer.Write("# DbVersion=" + Header.DbVersion + "\n");    // mandatory per PEFF 1.0 sec 3.3.2
             if (!string.IsNullOrEmpty(Header.DbDate)) Writer.Write("# DbDate=" + Header.DbDate + "\n");
             Writer.Write("# NumberOfEntries=" + Header.NumberOfEntries + "\n");
             Writer.Write("# SequenceType=AA\n");
@@ -466,15 +466,48 @@ namespace UniPEFF
             return "sp";   // Swiss-Prot and the safe default
         }
 
-        // Escape the four PEFF-reserved characters per the PSI spec (matches OpenMS escape_peff).
+        // Make text PEFF-safe. PEFF requires ASCII, so non-ASCII is transliterated/stripped first
+        // (ToAscii). Then reserved characters are escaped -- but per the spec only "|", "\" and
+        // UNPAIRED parentheses are escaped; balanced parentheses are left intact so readers can
+        // handle embedded parens (e.g. "N-linked (GlcNAc...)").
         static string EscapePeff(string Value)
         {
             if (string.IsNullOrEmpty(Value)) return Value ?? "";
-            var Builder = new StringBuilder(Value.Length);
-            foreach (char C in Value)
+            Value = ToAscii(Value);
+            // Mark unpaired parentheses; only those (plus | and \) get a backslash.
+            var Unpaired = new HashSet<int>();
+            var Open = new Stack<int>();
+            for (int i = 0; i < Value.Length; i++)
             {
-                if (C == '\\' || C == '|' || C == '(' || C == ')') Builder.Append('\\');
+                if (Value[i] == '(') Open.Push(i);
+                else if (Value[i] == ')') { if (Open.Count > 0) Open.Pop(); else Unpaired.Add(i); }
+            }
+            foreach (int i in Open) Unpaired.Add(i);
+
+            var Builder = new StringBuilder(Value.Length);
+            for (int i = 0; i < Value.Length; i++)
+            {
+                char C = Value[i];
+                if (C == '\\' || C == '|' || ((C == '(' || C == ')') && Unpaired.Contains(i))) Builder.Append('\\');
                 Builder.Append(C);
+            }
+            return Builder.ToString();
+        }
+
+        // PEFF allows only ASCII characters. Normalize (so accents such as e-acute collapse to
+        // "e"), drop combining marks, and replace any remaining non-ASCII (e.g. Greek letters)
+        // with "?" (a character explicitly permitted in PEFF item text).
+        static string ToAscii(string Value)
+        {
+            bool AlreadyAscii = true;
+            foreach (char C in Value) if (C > '\x7F') { AlreadyAscii = false; break; }
+            if (AlreadyAscii) return Value;
+            string Nfkd = Value.Normalize(NormalizationForm.FormKD);
+            var Builder = new StringBuilder(Nfkd.Length);
+            foreach (char C in Nfkd)
+            {
+                if (CharUnicodeInfo.GetUnicodeCategory(C) == UnicodeCategory.NonSpacingMark) continue;
+                Builder.Append(C <= '\x7F' ? C : '?');
             }
             return Builder.ToString();
         }
@@ -537,21 +570,30 @@ namespace UniPEFF
             {
                 var Builder = new StringBuilder();
                 for (var V = SequenceVariantsSimple.Next; V != null; V = V.Next)
-                    Builder.Append('(').Append(IdPrefix()).Append(Pos(V.Position)).Append('|').Append(EscapePeff(V.NewAA.ToString())).Append(')');
+                {
+                    if (V.Position == 0) continue;   // PEFF VariantSimple position MUST be > 0; "?" is ModRes-only
+                    Builder.Append('(').Append(IdPrefix()).Append(V.Position).Append('|').Append(EscapePeff(V.NewAA.ToString())).Append(')');
+                }
                 if (Builder.Length > 0) Tag("VariantSimple", Builder.ToString());
             }
             // Complex (multi-residue / deletion) variants
             {
                 var Builder = new StringBuilder();
                 for (var V = SequenceVariantsComplex.Next; V != null; V = V.Next)
-                    Builder.Append('(').Append(IdPrefix()).Append(Pos(V.Begin)).Append('|').Append(Pos(V.End)).Append('|').Append(EscapePeff(V.NewSeq ?? "")).Append(')');
+                {
+                    if (V.Begin == 0 || V.End == 0) continue;   // positions count from 1; "?" is ModRes-only
+                    Builder.Append('(').Append(IdPrefix()).Append(V.Begin).Append('|').Append(V.End).Append('|').Append(EscapePeff(V.NewSeq ?? "")).Append(')');
+                }
                 if (Builder.Length > 0) Tag("VariantComplex", Builder.ToString());
             }
             // Molecular processing -> \Processed
             {
                 var Builder = new StringBuilder();
                 for (var P = MolecularProcessings.Next; P != null; P = P.Next)
-                    Builder.Append('(').Append(IdPrefix()).Append(Pos(P.Begin)).Append('|').Append(Pos(P.End)).Append('|').Append(EscapePeff(P.CV ?? "")).Append('|').Append(EscapePeff(P.Type ?? "")).Append(')');
+                {
+                    if (P.Begin == 0 || P.End == 0) continue;   // \Processed positions count from 1; "?" is ModRes-only
+                    Builder.Append('(').Append(IdPrefix()).Append(P.Begin).Append('|').Append(P.End).Append('|').Append(EscapePeff(P.CV ?? "")).Append('|').Append(EscapePeff(P.Type ?? "")).Append(')');
+                }
                 if (Builder.Length > 0) Tag("Processed", Builder.ToString());
             }
             // Disulfide connectivity (Option B only): reference the two half-cystine ids
@@ -815,7 +857,7 @@ namespace UniPEFF
         public string Prefix = "sp";
         public string DbDescription = "";
         public string DbSource = "https://www.uniprot.org";
-        public string DbVersion = "";
+        public string DbVersion = "unknown";   // mandatory key; override with -dbversion
         public string DbDate = "";
         public int NumberOfEntries = 0;
         public bool HasAnnotationIdentifiers = false;
@@ -836,9 +878,11 @@ namespace UniPEFF
             var NextIsInput = false;
             var NextIsOutput = false;
             var NextIsPrefix = false;
+            var NextIsDbVersion = false;
             var InputFile = "NA";
             string OutputFile = null;
             string UserPrefix = null;
+            string UserDbVersion = null;
             var AnnotationIdentifiers = false;
             var PTMCV = new PTMList();
             foreach (var item in args)
@@ -857,6 +901,11 @@ namespace UniPEFF
                 {
                     UserPrefix = item;
                     NextIsPrefix = false;
+                }
+                else if (NextIsDbVersion)
+                {
+                    UserDbVersion = item;
+                    NextIsDbVersion = false;
                 }
                 else switch (item)
                     {
@@ -878,6 +927,9 @@ namespace UniPEFF
                         case "-prefix":
                             NextIsPrefix = true;
                             break;
+                        case "-dbversion":
+                            NextIsDbVersion = true;
+                            break;
                         case "-AnnotationIdentifiers":
                             AnnotationIdentifiers = true;
                             break;
@@ -886,9 +938,9 @@ namespace UniPEFF
                             break;
                     }
             }
-            if (NextIsInput || NextIsOutput || NextIsPrefix)
+            if (NextIsInput || NextIsOutput || NextIsPrefix || NextIsDbVersion)
             {
-                Console.Error.WriteLine("\tError: -in, -out, and -prefix each require a following value.");
+                Console.Error.WriteLine("\tError: -in, -out, -prefix, and -dbversion each require a following value.");
                 return;
             }
             if (RecordAminoAcidModifications)
@@ -925,7 +977,9 @@ namespace UniPEFF
                 }
                 Console.WriteLine("Writing PEFF to " + OutputFile + (AnnotationIdentifiers ? " (with annotation identifiers)" : ""));
                 using var PeffWriter = new StreamWriter(OutputFile);
-                UniProtDB.WritePeff(PeffWriter, new PeffHeader(), UserPrefix, AnnotationIdentifiers);
+                var Header = new PeffHeader();
+                if (!string.IsNullOrEmpty(UserDbVersion)) Header.DbVersion = UserDbVersion;
+                UniProtDB.WritePeff(PeffWriter, Header, UserPrefix, AnnotationIdentifiers);
             }
         }
     }

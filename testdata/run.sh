@@ -20,3 +20,12 @@ trap 'rm -f actual_A.peff actual_B.peff' EXIT
 diff -u expected_A.peff actual_A.peff
 diff -u expected_B.peff actual_B.peff
 echo "PASS: PEFF output matches goldens."
+
+# Spec-conformance assertions, independent of the goldens:
+#  - the DB description block MUST contain DbVersion (PEFF 1.0 section 3.3.2)
+#  - PEFF permits only ASCII characters
+for f in expected_A.peff expected_B.peff; do
+  grep -q '^# DbVersion=' "$f" || { echo "FAIL: $f lacks the mandatory '# DbVersion=' header"; exit 1; }
+  if LC_ALL=C grep -q '[^ -~]' "$f"; then echo "FAIL: $f contains non-ASCII or control characters"; exit 1; fi
+done
+echo "PASS: conformance checks (mandatory DbVersion present, ASCII-only)."

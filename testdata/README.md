@@ -10,21 +10,25 @@ unit-test framework; `run.sh` diffs the tool's output against committed golden f
 # dotnet not on PATH?  ->  DOTNET=$HOME/.dotnet/dotnet ./run.sh
 ```
 
-It builds the project, converts `comprehensive.xml` in both modes, and diffs against
-`expected_C.peff` (default / "Option C") and `expected_B.peff` (`-AnnotationIdentifiers` /
-"Option B"). Exit 0 = match. The tool reads `ptmlist.txt` from the working directory, so
-`run.sh` runs from this folder. If a code change *intentionally* alters output, regenerate
-the goldens with the two `dotnet … -out expected_*.peff` commands.
+It builds the project, converts `comprehensive.xml` in both modes, diffs against
+`expected_A.peff` (default) and `expected_B.peff` (`-AnnotationIdentifiers`), and runs a few
+PEFF-conformance assertions (mandatory `DbVersion` header present, ASCII-only output). Exit 0
+= match. The tool reads `ptmlist.txt` from the working directory, so `run.sh` runs from this
+folder. If a code change *intentionally* alters output, regenerate the goldens with the two
+`dotnet … -out expected_*.peff` commands.
 
 ## What `comprehensive.xml` covers
 
 Entry **P12345** (Swiss-Prot) is a deliberate "kitchen sink":
 
-- **Entry fields:** two accessions (only the first is kept), mnemonic, a fullName containing
-  all four PEFF-reserved characters `( ) | \` (escaping), and a gene with a synonym (only
+- **Entry fields:** two accessions (only the first is kept), mnemonic, a fullName mixing
+  paired and unpaired parens plus `|` and `\` (escaping: only `|`, `\` and *unpaired* parens
+  are backslash-escaped; balanced parens are left intact), and a gene with a synonym (only
   the primary name is kept).
 - **Molecular processing:** all five types → their PEFF CVs — initiator methionine (single
-  position), signal peptide, transit peptide, propeptide, chain.
+  position), signal peptide, transit peptide, propeptide, chain; plus an unknown-position
+  processing feature that MUST be omitted (`\Processed` positions count from 1; "?" is
+  ModRes-only).
 - **Modifications:** PSI-MOD (`\ModResPsi`), Unimod-only (`\ModResUnimod`), generic
   no-accession (`\ModRes`); the `(Microbial infection)` and `;`-suffix description strips;
   and a description absent from `ptmlist.txt` (warns, produces no output, does not crash).
@@ -39,8 +43,9 @@ Entry **P12345** (Swiss-Prot) is a deliberate "kitchen sink":
   parsed without error and produce no output.
 
 Entry **Q67890** (TrEMBL) is a minimal, annotation-free entry: it checks multi-entry
-handling, the annotation-free `>` line, and that a single `# Prefix=` is used for the whole
-file (the TrEMBL entry is written as `>sp:` to stay consistent with the header).
+handling, the annotation-free `>` line, a single `# Prefix=` for the whole file (the TrEMBL
+entry is written as `>sp:` to stay consistent with the header), and non-ASCII text in the
+protein name (sanitized to ASCII, as PEFF requires).
 
 ## Integration test (optional, real data)
 
@@ -53,10 +58,10 @@ curl -G 'https://rest.uniprot.org/uniprotkb/stream' \
   --data-urlencode 'query=organism_id:9606 AND reviewed:true' \
   --data-urlencode 'format=xml' --data-urlencode 'compressed=true' \
   -o human_sprot.xml.gz
-dotnet "$ROOT/bin/Debug/net8.0/UniPEFF.dll" -in human_sprot.xml.gz -out human.peff                       # Option C
-dotnet "$ROOT/bin/Debug/net8.0/UniPEFF.dll" -in human_sprot.xml.gz -out human_B.peff -AnnotationIdentifiers  # Option B
+dotnet "$ROOT/bin/Debug/net8.0/UniPEFF.dll" -in human_sprot.xml.gz -out human.peff                       # default
+dotnet "$ROOT/bin/Debug/net8.0/UniPEFF.dll" -in human_sprot.xml.gz -out human_B.peff -AnnotationIdentifiers
 ```
 
 Last verified run: 20,431 entries (~169 MB gz in → ~19 MB PEFF out, ~12 s), no crash and no
 missing-PTM warnings. Spot check — insulin `P01308` emits its six half-cystines as `\ModResPsi`
-and, in Option B, the correct disulfide connectivity `31-96, 43-109, 95-100`.
+and, with `-AnnotationIdentifiers`, the correct disulfide connectivity `31-96, 43-109, 95-100`.

@@ -9,7 +9,7 @@
     <name>KSINK_HUMAN</name>
     <protein>
       <recommendedName>
-        <fullName>Kitchen-sink protein (test) | alpha\beta</fullName>
+        <fullName>Kitchen-sink protein (test) | alpha\beta :-)</fullName>
       </recommendedName>
     </protein>
     <gene>
@@ -131,6 +131,13 @@
         <position position="95"/>
       </location>
     </feature>
+    <!-- Unknown-position processing: MUST be omitted from output (PEFF positions count from 1; "?" is ModRes-only). -->
+    <feature type="propeptide">
+      <location>
+        <begin status="unknown"/>
+        <end position="40"/>
+      </location>
+    </feature>
     <sequence length="100" mass="11000">MSEQNNTEMTFQIQRIYTKDISFEAPNAPHVFQKDWQPEVKLDLDTASSQLADDVYEVVLRVTVTASLGEETAFLCEVQQGGKLMNPQRSTVWYACDEFG</sequence>
   </entry>
   <entry dataset="TrEMBL">
@@ -138,7 +145,7 @@
     <name>MINI_HUMAN</name>
     <protein>
       <recommendedName>
-        <fullName>Minimal TrEMBL entry</fullName>
+        <fullName>Minimal TrEMBL entry &#946;&#233;</fullName>
       </recommendedName>
     </protein>
     <sequence length="31" mass="3000">MKLDLDTASSQLADDVYEVVLRVTVTASLGE</sequence>
