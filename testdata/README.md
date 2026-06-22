@@ -51,10 +51,12 @@ Entry **P12345** (Swiss-Prot) is a deliberate "kitchen sink":
 - **Still-unhandled feature types** (`sequence conflict`, `non-standard amino acid`) are
   parsed without error and produce no output.
 
-Entry **Q67890** (TrEMBL) is a minimal, annotation-free entry: it checks multi-entry
-handling, the annotation-free `>` line, a single `# Prefix=` for the whole file (the TrEMBL
-entry is written as `>sp:` to stay consistent with the header), and non-ASCII text in the
-protein name (sanitized to ASCII, as PEFF requires).
+Entry **Q67890** (TrEMBL) is annotation-free but carries metadata (organism, versions,
+`\PE=4` predicted, a second accession → `\AltAC`): it checks multi-entry handling, the
+annotation-free `>` line, **per-dataset database blocks** (being TrEMBL it is emitted under
+its own `# Prefix=tr` / `>tr:` block, separate from the Swiss-Prot block — and a `-prefix`
+override instead collapses everything into one block), and non-ASCII text in the protein name
+(sanitized to ASCII, as PEFF requires).
 
 ## Integration test (optional, real data)
 

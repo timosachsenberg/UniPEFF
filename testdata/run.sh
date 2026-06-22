@@ -27,5 +27,9 @@ echo "PASS: PEFF output matches goldens."
 for f in expected_A.peff expected_B.peff; do
   grep -q '^# DbVersion=' "$f" || { echo "FAIL: $f lacks the mandatory '# DbVersion=' header"; exit 1; }
   if LC_ALL=C grep -q '[^ -~]' "$f"; then echo "FAIL: $f contains non-ASCII or control characters"; exit 1; fi
+  # multi-DB blocks: the TrEMBL entry MUST sit under its own >tr: block, and there must be
+  # three '# //' separators (file-description block + sp block + tr block).
+  grep -q '^>tr:Q67890' "$f" || { echo "FAIL: $f: TrEMBL entry is not under a >tr: block"; exit 1; }
+  test "$(grep -c '^# //' "$f")" -eq 3 || { echo "FAIL: $f: expected 3 '# //' separators (file + sp + tr blocks)"; exit 1; }
 done
-echo "PASS: conformance checks (mandatory DbVersion present, ASCII-only)."
+echo "PASS: conformance checks (DbVersion present, ASCII-only, per-dataset DB blocks)."
