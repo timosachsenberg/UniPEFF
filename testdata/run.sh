@@ -40,5 +40,8 @@ for f in expected_A.peff expected_B.peff; do
   # three '# //' separators (file-description block + sp block + tr block).
   grep -q '^>tr:Q67890' "$f" || { echo "FAIL: $f: TrEMBL entry is not under a >tr: block"; exit 1; }
   test "$(grep -c '^# //' "$f")" -eq 3 || { echo "FAIL: $f: expected 3 '# //' separators (file + sp + tr blocks)"; exit 1; }
+  # isoforms: the alternative-products comment + splice-variant feature MUST be ignored (isoform
+  # expansion is not implemented), so no isoform-id (e.g. P12345-2) descriptor line may appear.
+  if grep -qE '^>[a-z]+:[A-Za-z0-9]+-[0-9]+ ' "$f"; then echo "FAIL: $f emits an isoform-id descriptor line"; exit 1; fi
 done
-echo "PASS: conformance checks (DbVersion present, ASCII-only, per-dataset DB blocks)."
+echo "PASS: conformance checks (DbVersion, ASCII, per-dataset blocks, isoforms ignored)."
